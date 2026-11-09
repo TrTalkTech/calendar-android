@@ -1,0 +1,48 @@
+# Gradle / Android build
+.gradle/
+build/
+**/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Local machine / IDE
+local.properties
+.idea/
+*.iml
+.DS_Store
+*.swp
+*~
+
+# Signing secrets — never publish
+keystore/
+keystore.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+
+# Internal notes, vaults, store assets (not source)
+docs/
+docs-obsidian/
+store/
+.icon-preview/
+.obsidian/
+
+# Python / tooling caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Misc secrets
+.env
+.env.*
+*.secret
+credentials.json
+google-services.json

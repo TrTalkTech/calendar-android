@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?><!--
+   Правила резервного копирования; при необходимости раскомментируйте и настройте.
+   См. https://developer.android.com/guide/topics/data/autobackup
+   На устройствах ниже API 31 файл не используется.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="calendar_visible_calendars.xml" />
+    <exclude domain="sharedpref" path="calendar_bootstrap.xml" />
+    <exclude domain="sharedpref" path="calendar_app_theme.xml" />
+</full-backup-content>

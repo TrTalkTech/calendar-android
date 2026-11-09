@@ -1,0 +1,14 @@
+---
+description: Hygiene for publishing calendar-android (or any public mirror) — no secrets, PII, or private docs
+alwaysApply: true
+---
+
+# Public publish
+
+Before any push to a public remote (GitHub etc.):
+
+1. Run `./tools/check-public-tree.sh` and fix failures.
+2. Do not commit `keystore/`, `keystore.properties`, `local.properties`, `docs/`, `docs-obsidian/`, `store/`, APK/AAB, or signing material.
+3. Commit author/committer must use GitHub noreply (`*@users.noreply.github.com`). Do not put personal Gmail/Yandex/etc. in git metadata. Prefer env vars for the commit — do not change global `git config` unless the user asks.
+4. Tests and tools: only synthetic fixtures (`example.com`, generic names like Work/Local). No real work emails, corporate calendar names, absolute home/volume mount paths, or internal password-file names in source or in check-script regex literals.
+5. If history already leaked PII in metadata, rewrite authors and force-push only when the user explicitly asks to remediate the public repo.
