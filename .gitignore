@@ -13,6 +13,7 @@ captures/
 # Local machine / IDE
 local.properties
 .idea/
+.cursor/
 *.iml
 .DS_Store
 *.swp

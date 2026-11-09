@@ -42,7 +42,7 @@ while IFS= read -r f; do
   esac
 
   case "$f" in
-    keystore/*|docs/*|docs-obsidian/*|store/*|.icon-preview/*|.idea/*|.gradle/*|*/build/*)
+    keystore/*|docs/*|docs-obsidian/*|store/*|.icon-preview/*|.idea/*|.cursor/*|.gradle/*|*/build/*)
       echo "BLOCKED: $f (private path)"; fail=1; continue ;;
   esac
 
