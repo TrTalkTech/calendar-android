@@ -38,7 +38,7 @@ class TaskCalendarsFilterTest {
     }
 
     @Test
-    fun allDayFreeOnExchangeWriteCalendar_hiddenFromAgenda() {
+    fun allDayFreeOnExchangeWriteCalendar_hiddenOnlyWhenAppTask() {
         val task = CalendarEvent(
             eventId = 10,
             title = "Задача",
@@ -50,10 +50,11 @@ class TaskCalendarsFilterTest {
             color = null,
             availability = EventOverlap.AVAILABILITY_FREE,
         )
-        assertTrue(task.isHiddenExchangeTask(setOf(1L)))
-        assertFalse(task.copy(allDay = false).isHiddenExchangeTask(setOf(1L)))
-        assertFalse(task.copy(availability = 0).isHiddenExchangeTask(setOf(1L)))
-        assertFalse(task.isHiddenExchangeTask(setOf(9L)))
+        assertFalse(task.isHiddenExchangeTask(setOf(1L), appTaskEventIds = emptySet()))
+        assertTrue(task.isHiddenExchangeTask(setOf(1L), appTaskEventIds = setOf(10L)))
+        assertFalse(task.copy(allDay = false).isHiddenExchangeTask(setOf(1L), setOf(10L)))
+        assertFalse(task.copy(availability = 0).isHiddenExchangeTask(setOf(1L), setOf(10L)))
+        assertFalse(task.isHiddenExchangeTask(setOf(9L), setOf(10L)))
     }
 
     private fun calendar(id: Long, name: String) = WritableCalendar(

@@ -52,6 +52,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.example.calendar.R
 import com.example.calendar.data.AccountSlots
 import com.example.calendar.data.AccountSlotsState
+import com.example.calendar.data.CalendarAccountKind
 import com.example.calendar.data.WritableCalendar
 import com.example.calendar.data.eventCalendars
 import com.example.calendar.data.taskCalendars
@@ -151,8 +152,11 @@ fun CalendarsSettingsSection(
             }
 
             else -> {
-                // Показываем только настроенные слоты + один пустой для добавления.
+                // Показываем только настроенные/зарезервированные слоты + один пустой для добавления.
                 val visibleSlots = remember(slots) { slotsWithIndex(slots) }
+                val unassigned = remember(slots, calendars) {
+                    AccountSlots.unassignedAccountGroups(slots, calendars)
+                }
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -174,6 +178,30 @@ fun CalendarsSettingsSection(
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
+                }
+                if (unassigned.isNotEmpty()) {
+                    val providerExchange = stringResource(R.string.calendars_provider_exchange)
+                    val providerGoogle = stringResource(R.string.calendars_provider_google)
+                    val providerCaldav = stringResource(R.string.calendars_provider_caldav)
+                    val providerLocal = stringResource(R.string.calendars_provider_local)
+                    val providerOther = stringResource(R.string.calendars_provider_other)
+                    val names = unassigned.joinToString(", ") { group ->
+                        val provider = when (group.kind) {
+                            CalendarAccountKind.Exchange -> providerExchange
+                            CalendarAccountKind.Google -> providerGoogle
+                            CalendarAccountKind.CalDav -> providerCaldav
+                            CalendarAccountKind.Local -> providerLocal
+                            CalendarAccountKind.Other -> providerOther
+                        }
+                        val account = group.accountName.takeIf { it.isNotBlank() }
+                        if (account != null) "$provider · $account" else provider
+                    }
+                    Text(
+                        text = stringResource(R.string.calendars_unassigned_warning, names),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MacColors.secondaryLabel,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                    )
                 }
             }
         }
@@ -214,6 +242,7 @@ private fun AccountSlotCard(
     val defaultCal = slot.defaultEventCalendarId?.let { byId[it] }
         ?: slot.eventCalendarIds.firstOrNull()?.let { byId[it] }
     val name = defaultCal?.displayName?.ifBlank { null }
+        ?: slot.accountName?.takeIf { it.isNotBlank() }
         ?: stringResource(R.string.calendars_slot_empty)
     val number = stringResource(R.string.calendars_slot_number, index + 1)
     val selected = state.activeIndex == index && slot.isConfigured

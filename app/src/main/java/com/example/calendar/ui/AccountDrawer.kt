@@ -109,12 +109,20 @@ fun Modifier.leftEdgeSwipeDrawerGesture(
     }
 }
 
-/** Настроенные слоты + один первый пустой (для добавления), чтобы не рисовать 10 заглушек. */
+/** Настроенные/зарезервированные слоты + один первый свободный (для добавления), без 10 заглушек. */
 internal fun slotsWithIndex(state: AccountSlotsState): List<Pair<Int, com.example.calendar.data.AccountSlot>> =
     state.slots.withIndex().let { all ->
-        val configured = all.filter { it.value.isConfigured }.map { it.index to it.value }
-        val firstEmpty = all.firstOrNull { !it.value.isConfigured }?.let { it.index to it.value }
-        if (firstEmpty != null) configured + firstEmpty else configured
+        val kept = all
+            .filter { it.value.isConfigured || it.value.isReserved }
+            .map { it.index to it.value }
+        val firstFree = all
+            .firstOrNull { !it.value.isConfigured && !it.value.isReserved }
+            ?.let { it.index to it.value }
+        if (firstFree != null && kept.none { it.first == firstFree.first }) {
+            kept + firstFree
+        } else {
+            kept
+        }
     }
 
 /** Содержимое боковой панели: список карточек-аккаунтов, тап переключает активный. */

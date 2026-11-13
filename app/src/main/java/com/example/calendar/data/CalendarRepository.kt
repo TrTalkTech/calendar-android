@@ -6,11 +6,13 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.provider.CalendarContract
+import android.util.Log
 import androidx.core.database.getIntOrNull
 import androidx.core.database.getLongOrNull
 import androidx.core.database.getStringOrNull
 import com.example.calendar.AppLocale
 import com.example.calendar.R
+import com.example.calendar.RRuleOccurrence
 import com.example.calendar.ui.EventConferenceLinks
 import java.time.Duration
 import java.time.Instant
@@ -29,6 +31,8 @@ private val notCancelledSql =
 private val notDeclinedSql = EventRsvp.notDeclinedSql(CalendarContract.Events.SELF_ATTENDEE_STATUS)
 
 private val visibleEventSql = "$notCancelledSql AND $notDeclinedSql"
+
+private const val REPO_TAG = "CalendarRepository"
 
 class CalendarRepository(
     private val contentResolver: ContentResolver,
@@ -113,6 +117,16 @@ class CalendarRepository(
             calendarIdCache = calendarIdCache,
         )
 
+        val recurringRecovery = mergeRecurringMastersMissingInstances(
+            day = date,
+            dayStartMillis = startMillis,
+            dayEndMillis = endMillis,
+            zone = zone,
+            results = results,
+            visibleCalendarIds = visibleCalendarIds,
+            calendarIdCache = calendarIdCache,
+        )
+
         val missingEventIds = fallbackEvents
             .map { it.eventId }
             .filter { eventId -> results.values.none { it.eventId == eventId } }
@@ -145,7 +159,8 @@ class CalendarRepository(
             )
         }
 
-        val providerEventIds = results.values.map { it.eventId }.toSet()
+        val providerEventIds = results.values.map { it.eventId }.toSet() -
+            recurringRecovery.synthesizedIds
 
         mergeFallbackEventsForDay(
             dayStartMillis = startMillis,
@@ -156,10 +171,191 @@ class CalendarRepository(
             fallbackEvents = fallbackEvents,
         )
 
+        if (recurringRecovery.synthesizedIds.isNotEmpty()) {
+            Log.i(
+                REPO_TAG,
+                "synthesized recurring occurrences ids=${recurringRecovery.synthesizedIds}",
+            )
+        }
+
         return CalendarDayEventsQuery(
             events = attachJoinLinks(attachAttendees(results.values.sortedBy { it.beginMillis })),
             providerEventIds = providerEventIds,
+            needsInstancesRecovery = recurringRecovery.needsRecovery,
+            synthesizedRecurringEventIds = recurringRecovery.synthesizedIds,
         )
+    }
+
+    private data class RecurringMergeResult(
+        val synthesizedIds: Set<Long>,
+        val needsRecovery: Boolean,
+    )
+
+    /**
+     * OEM иногда не разворачивает Instances для RRULE. Тогда мастер есть в Events,
+     * а день пустой. Синтезируем occurrence по простому RRULE и просим ViewModel сделать sync/warmup.
+     */
+    private fun mergeRecurringMastersMissingInstances(
+        day: LocalDate,
+        dayStartMillis: Long,
+        dayEndMillis: Long,
+        zone: ZoneId,
+        results: LinkedHashMap<String, CalendarEvent>,
+        visibleCalendarIds: Set<Long>?,
+        calendarIdCache: MutableMap<Long, Long?>,
+    ): RecurringMergeResult {
+        val selection = "${CalendarContract.Events.DELETED} = ? AND " +
+            "$visibleEventSql AND " +
+            "${CalendarContract.Events.RRULE} IS NOT NULL AND ${CalendarContract.Events.RRULE} != '' AND " +
+            "${CalendarContract.Events.DTSTART} < ?"
+        val projection = arrayOf(
+            CalendarContract.Events._ID,
+            CalendarContract.Events.CALENDAR_ID,
+            CalendarContract.Events.TITLE,
+            CalendarContract.Events.DTSTART,
+            CalendarContract.Events.DTEND,
+            CalendarContract.Events.DURATION,
+            CalendarContract.Events.ALL_DAY,
+            CalendarContract.Events.EVENT_TIMEZONE,
+            CalendarContract.Events.EVENT_COLOR,
+            CalendarContract.Events.EVENT_LOCATION,
+            CalendarContract.Events.SELF_ATTENDEE_STATUS,
+            CalendarContract.Events.AVAILABILITY,
+            CalendarContract.Events.RRULE,
+        )
+        val synthesized = mutableSetOf<Long>()
+        var needsRecovery = false
+        contentResolver.query(
+            CalendarContract.Events.CONTENT_URI,
+            projection,
+            selection,
+            arrayOf("0", dayEndMillis.toString()),
+            "${CalendarContract.Events.DTSTART} ASC",
+        )?.use { cursor ->
+            val presentIds = results.values.map { it.eventId }.toHashSet()
+            while (cursor.moveToNext()) {
+                val idIdx = cursor.getColumnIndex(CalendarContract.Events._ID)
+                val startIdx = cursor.getColumnIndex(CalendarContract.Events.DTSTART)
+                val rruleIdx = cursor.getColumnIndex(CalendarContract.Events.RRULE)
+                val allDayIdx = cursor.getColumnIndex(CalendarContract.Events.ALL_DAY)
+                val tzIdx = cursor.getColumnIndex(CalendarContract.Events.EVENT_TIMEZONE)
+                if (idIdx < 0 || startIdx < 0 || rruleIdx < 0) continue
+                val eventId = cursor.getLongOrNull(idIdx) ?: continue
+                if (eventId in presentIds) continue
+                val dtStart = cursor.getLongOrNull(startIdx) ?: continue
+                val rrule = cursor.getStringOrNull(rruleIdx)?.trim().orEmpty()
+                if (rrule.isEmpty()) continue
+                val allDay = allDayIdx >= 0 && cursor.getIntOrNull(allDayIdx) == 1
+                val eventZone = if (allDay) {
+                    ZoneId.of("UTC")
+                } else {
+                    val tzId = if (tzIdx >= 0) cursor.getStringOrNull(tzIdx) else null
+                    runCatching { ZoneId.of(tzId ?: zone.id) }.getOrDefault(zone)
+                }
+                val seriesStart = Instant.ofEpochMilli(dtStart).atZone(eventZone).toLocalDate()
+                if (!RRuleOccurrence.occursOn(rrule, seriesStart, day)) continue
+
+                val calIdx = cursor.getColumnIndex(CalendarContract.Events.CALENDAR_ID)
+                var calendarId = if (calIdx >= 0) cursor.getLongOrNull(calIdx) else null
+                if (calendarId == null) {
+                    calendarId = resolveCalendarIdForEvent(contentResolver, eventId, calendarIdCache)
+                }
+                if (!matchesVisibleCalendar(calendarId, visibleCalendarIds)) {
+                    Log.d(REPO_TAG, "drop recurring master eventId=$eventId reason=filter calendarId=$calendarId")
+                    continue
+                }
+                val selfIdx = cursor.getColumnIndex(CalendarContract.Events.SELF_ATTENDEE_STATUS)
+                val selfStatus = if (selfIdx >= 0) {
+                    cursor.getIntOrNull(selfIdx) ?: EventRsvp.STATUS_NONE
+                } else {
+                    EventRsvp.STATUS_NONE
+                }
+                if (EventRsvp.shouldHideFromAgenda(selfStatus)) {
+                    Log.d(REPO_TAG, "drop recurring master eventId=$eventId reason=declined")
+                    continue
+                }
+
+                val fromInstances = LinkedHashMap<String, CalendarEvent>()
+                mergeInstancesFromWiderWindow(
+                    eventIds = listOf(eventId),
+                    dayStartMillis = dayStartMillis,
+                    dayEndMillis = dayEndMillis,
+                    zone = zone,
+                    results = fromInstances,
+                    visibleCalendarIds = visibleCalendarIds,
+                    calendarIdCache = calendarIdCache,
+                )
+                if (fromInstances.isNotEmpty()) {
+                    fromInstances.forEach { (key, event) -> results.putIfAbsent(key, event) }
+                    presentIds += eventId
+                    continue
+                }
+
+                needsRecovery = true
+                val titleIdx = cursor.getColumnIndex(CalendarContract.Events.TITLE)
+                val title = if (titleIdx >= 0) {
+                    cursor.getStringOrNull(titleIdx)?.takeIf { it.isNotBlank() }
+                } else {
+                    null
+                } ?: untitledLabel
+                val colorIdx = cursor.getColumnIndex(CalendarContract.Events.EVENT_COLOR)
+                val color = if (colorIdx >= 0) cursor.getIntOrNull(colorIdx) else null
+                val locIdx = cursor.getColumnIndex(CalendarContract.Events.EVENT_LOCATION)
+                val location = if (locIdx >= 0) cursor.getStringOrNull(locIdx)?.trim().orEmpty() else ""
+                val availabilityIdx = cursor.getColumnIndex(CalendarContract.Events.AVAILABILITY)
+                val availability = if (availabilityIdx >= 0) cursor.getIntOrNull(availabilityIdx) ?: 0 else 0
+                val durationMs = cursor.eventEndMillisForOverlap(dtStart, allDay) - dtStart
+                val (begin, end) = occurrenceBoundsForDay(
+                    day = day,
+                    allDay = allDay,
+                    masterStartMillis = dtStart,
+                    durationMillis = durationMs.coerceAtLeast(if (allDay) 86_400_000L else 3_600_000L),
+                    eventZone = eventZone,
+                )
+                if (!eventOverlapsLocalDay(begin, end, allDay, dayStartMillis, dayEndMillis, zone)) {
+                    continue
+                }
+                val synthesizedEvent = CalendarEvent(
+                    eventId = eventId,
+                    title = title,
+                    beginMillis = begin,
+                    endMillis = end,
+                    allDay = allDay,
+                    calendarId = calendarId,
+                    calendarName = null,
+                    color = color,
+                    location = location,
+                    availability = availability,
+                    selfAttendeeStatus = selfStatus,
+                )
+                val key = "${synthesizedEvent.eventId}-${synthesizedEvent.beginMillis}"
+                if (results.putIfAbsent(key, synthesizedEvent) == null) {
+                    synthesized += eventId
+                    presentIds += eventId
+                    Log.i(REPO_TAG, "synthesized recurring eventId=$eventId day=$day")
+                }
+            }
+        }
+        return RecurringMergeResult(
+            synthesizedIds = synthesized,
+            needsRecovery = needsRecovery || synthesized.isNotEmpty(),
+        )
+    }
+
+    private fun occurrenceBoundsForDay(
+        day: LocalDate,
+        allDay: Boolean,
+        masterStartMillis: Long,
+        durationMillis: Long,
+        eventZone: ZoneId,
+    ): Pair<Long, Long> {
+        if (allDay) {
+            val start = day.atStartOfDay(ZoneId.of("UTC")).toInstant().toEpochMilli()
+            return start to start + 86_400_000L
+        }
+        val masterLocal = Instant.ofEpochMilli(masterStartMillis).atZone(eventZone).toLocalDateTime()
+        val begin = day.atTime(masterLocal.toLocalTime()).atZone(eventZone).toInstant().toEpochMilli()
+        return begin to begin + durationMillis
     }
 
     private fun attachAttendees(events: List<CalendarEvent>): List<CalendarEvent> {

@@ -239,19 +239,27 @@ class AccountSlotsTest {
     }
 
     @Test
-    fun eventFilterIds_includesUnslottedCalendarsWhenSlotsFull() {
-        // Все 6 слотов заняты, 7-й аккаунт (DAVx5) не влез — его события не прячем
-        val slots = (1..6).map { i ->
-            AccountSlot(eventCalendarIds = listOf(i.toLong()), defaultEventCalendarId = i.toLong())
+    fun eventFilterIds_keepsStrictActiveIsolationWhenUnassignedExist() {
+        // Все 10 слотов заняты, 11-й аккаунт не влез — в активный фильтр не подмешиваем
+        val slots = (1..ACCOUNT_SLOT_COUNT).map { i ->
+            AccountSlot(
+                eventCalendarIds = listOf(i.toLong()),
+                defaultEventCalendarId = i.toLong(),
+                accountName = "acc$i@example.com",
+                accountType = "com.google",
+            )
         }
         val state = AccountSlotsState(slots, activeIndex = 0)
         val calendars = slots.mapIndexed { i, slot ->
-            cal(slot.eventCalendarIds.first(), "Cal$i", "acc$i@example.com", "com.google", primary = true)
+            cal(slot.eventCalendarIds.first(), "Cal$i", "acc${i + 1}@example.com", "com.google", primary = true)
         } + listOf(
             cal(77, "DAVx5", "dav@nc.local", "bitfire.at.davdroid", primary = true),
         )
-        val filter = AccountSlots.eventFilterIds(state, calendars)
-        assertEquals(setOf(1L, 77L), filter)
+        assertEquals(setOf(1L), AccountSlots.eventFilterIds(state, calendars))
+        val unassigned = AccountSlots.unassignedAccountGroups(state, calendars)
+        assertEquals(1, unassigned.size)
+        assertEquals("dav@nc.local", unassigned.first().accountName)
+        assertEquals(CalendarAccountKind.CalDav, unassigned.first().kind)
     }
 
     @Test
@@ -263,9 +271,7 @@ class AccountSlotsTest {
             activeIndex = 0,
         )
         val calendars = listOf(cal(1, "A", "a@x.com", "com.google"), cal(2, "B", "b@x.com", "com.google"))
-        // всё в слоте — фильтр только активный слот
         assertEquals(setOf(1L, 2L), AccountSlots.eventFilterIds(state, calendars))
-        // без списка календарей поведение прежнее — только активный слот
         assertEquals(setOf(1L, 2L), AccountSlots.eventFilterIds(state))
     }
 
@@ -275,6 +281,72 @@ class AccountSlotsTest {
         assertEquals(CalendarAccountKind.CalDav, AccountSlots.calendarAccountKind("at.bitfire.davx5"))
         assertEquals(CalendarAccountKind.Google, AccountSlots.calendarAccountKind("com.google"))
         assertEquals(CalendarAccountKind.Local, AccountSlots.calendarAccountKind("LOCAL"))
+    }
+
+    @Test
+    fun normalize_refillsSlotByAccountIdentityAfterIdRemap() {
+        val dirty = AccountSlotsState(
+            slots = listOf(
+                AccountSlot(
+                    eventCalendarIds = listOf(10),
+                    defaultEventCalendarId = 10,
+                    taskCalendarId = 11,
+                    accountName = "work@example.com",
+                    accountType = "com.google.android.gm.exchange",
+                ),
+                AccountSlot(
+                    eventCalendarIds = listOf(20),
+                    defaultEventCalendarId = 20,
+                    accountName = "personal@example.com",
+                    accountType = "com.google",
+                ),
+                AccountSlot(),
+            ),
+            activeIndex = 0,
+        )
+        val remapped = listOf(
+            cal(30, "Work", "work@example.com", "com.google.android.gm.exchange", primary = true),
+            cal(31, "Tasks", "work@example.com", "com.google.android.gm.exchange"),
+            cal(20, "Личное", "personal@example.com", "com.google"),
+        )
+        val clean = AccountSlots.normalize(dirty, remapped)
+        assertEquals(listOf(30L), clean.slot(0).eventCalendarIds)
+        assertEquals(30L, clean.slot(0).defaultEventCalendarId)
+        assertEquals(31L, clean.slot(0).taskCalendarId)
+        assertEquals(0, clean.activeIndex)
+        assertEquals(setOf(30L), AccountSlots.eventFilterIds(clean))
+        assertEquals(listOf(20L), clean.slot(1).eventCalendarIds)
+    }
+
+    @Test
+    fun normalize_keepsReservedEmptySlotForMissingAccount() {
+        val reserved = AccountSlotsState(
+            slots = listOf(
+                AccountSlot(
+                    accountName = "gone@example.com",
+                    accountType = "com.google",
+                ),
+                AccountSlot(
+                    eventCalendarIds = listOf(4),
+                    defaultEventCalendarId = 4,
+                    accountName = "Local",
+                    accountType = "LOCAL",
+                ),
+            ),
+            activeIndex = 1,
+        )
+        val calendars = listOf(cal(4, "Локальный", "Local", "LOCAL"))
+        val clean = AccountSlots.normalize(reserved, calendars)
+        assertTrue(clean.slot(0).eventCalendarIds.isEmpty())
+        assertEquals("gone@example.com", clean.slot(0).accountName)
+        assertTrue(clean.slot(0).isReserved)
+        // Новый аккаунт не занимает reserved-слот
+        val withNew = calendars + cal(9, "DAVx", "dav@nc.local", "bitfire.at.davdroid", primary = true)
+        val after = AccountSlots.normalize(clean, withNew)
+        assertEquals("gone@example.com", after.slot(0).accountName)
+        assertTrue(after.slot(0).eventCalendarIds.isEmpty())
+        val davxSlotIndex = after.slots.indexOfFirst { 9L in it.eventCalendarIds }
+        assertTrue(davxSlotIndex > 0)
     }
 
     private fun cal(
