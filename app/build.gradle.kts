@@ -1,4 +1,5 @@
 import java.util.Properties
+import com.android.build.api.variant.AndroidComponentsExtension
 
 plugins {
     alias(libs.plugins.android.application)
@@ -24,9 +25,12 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 5
-        versionName = "1.04"
+        versionName = "1.04.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Эмуляторные ABI не нужны: libodr_jni.so весит ~125МБ на каждый ABI
+        ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
 
     signingConfigs {
@@ -42,7 +46,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

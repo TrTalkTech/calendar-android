@@ -69,14 +69,17 @@ fun List<WritableCalendar>.preferredTaskCalendar(
 }
 
 /**
- * Первый экран и поиск никогда не показывают календарь задач,
- * даже если он отмечен в фильтре или фильтр не задан (все календари).
+ * Прячет только задачи Calendar 2.0 (метка / префикс «выполнено») с календаря записи Exchange,
+ * а не любые all-day FREE встречи на primary.
  */
-fun CalendarEvent.isHiddenExchangeTask(writeCalendarIds: Set<Long>): Boolean =
-    allDay &&
-        availability == EventOverlap.AVAILABILITY_FREE &&
-        calendarId != null &&
-        calendarId in writeCalendarIds
+fun CalendarEvent.isHiddenExchangeTask(
+    writeCalendarIds: Set<Long>,
+    appTaskEventIds: Set<Long> = emptySet(),
+): Boolean {
+    if (calendarId == null || calendarId !in writeCalendarIds) return false
+    if (!allDay || availability != EventOverlap.AVAILABILITY_FREE) return false
+    return AppTaskMarker.isAppTaskEvent(this, appTaskEventIds)
+}
 
 fun filterIdsForEventLists(
     rawFilter: Set<Long>?,

@@ -23,4 +23,11 @@ data class CalendarEvent(
 data class CalendarDayEventsQuery(
     val events: List<CalendarEvent>,
     val providerEventIds: Set<Long>,
+    /**
+     * Были recurring-мастера без строк в Instances — день мог быть неполным у OEM.
+     * ViewModel делает warmup/sync и повторное чтение.
+     */
+    val needsInstancesRecovery: Boolean = false,
+    /** Id recurring-событий, для которых occurrence синтезирован из RRULE. */
+    val synthesizedRecurringEventIds: Set<Long> = emptySet(),
 )

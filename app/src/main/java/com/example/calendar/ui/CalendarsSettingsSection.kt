@@ -45,15 +45,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.example.calendar.R
-import com.example.calendar.data.ACCOUNT_SLOT_COUNT
 import com.example.calendar.data.AccountSlots
 import com.example.calendar.data.AccountSlotsState
+import com.example.calendar.data.CalendarAccountKind
 import com.example.calendar.data.WritableCalendar
 import com.example.calendar.data.eventCalendars
 import com.example.calendar.data.taskCalendars
@@ -153,26 +152,56 @@ fun CalendarsSettingsSection(
             }
 
             else -> {
-                Row(
+                // Показываем только настроенные/зарезервированные слоты + один пустой для добавления.
+                val visibleSlots = remember(slots) { slotsWithIndex(slots) }
+                val unassigned = remember(slots, calendars) {
+                    AccountSlots.unassignedAccountGroups(slots, calendars)
+                }
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
                         .clip(RoundedCornerShape(12.dp))
                         .background(MacColors.contentBackground)
-                        .padding(horizontal = 4.dp, vertical = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.Top,
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    repeat(ACCOUNT_SLOT_COUNT) { index ->
+                    visibleSlots.forEach { (index, _) ->
                         AccountSlotCard(
                             calendars = calendars,
                             state = slots,
                             index = index,
                             onOpen = { editingSlot = index },
-                            onActivate = { onSlotsChange(AccountSlots.setActive(slots, index)) },
-                            modifier = Modifier.weight(1f),
+                            onActivate = {
+                                onSlotsChange(AccountSlots.setActive(slots, index))
+                            },
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
+                }
+                if (unassigned.isNotEmpty()) {
+                    val providerExchange = stringResource(R.string.calendars_provider_exchange)
+                    val providerGoogle = stringResource(R.string.calendars_provider_google)
+                    val providerCaldav = stringResource(R.string.calendars_provider_caldav)
+                    val providerLocal = stringResource(R.string.calendars_provider_local)
+                    val providerOther = stringResource(R.string.calendars_provider_other)
+                    val names = unassigned.joinToString(", ") { group ->
+                        val provider = when (group.kind) {
+                            CalendarAccountKind.Exchange -> providerExchange
+                            CalendarAccountKind.Google -> providerGoogle
+                            CalendarAccountKind.CalDav -> providerCaldav
+                            CalendarAccountKind.Local -> providerLocal
+                            CalendarAccountKind.Other -> providerOther
+                        }
+                        val account = group.accountName.takeIf { it.isNotBlank() }
+                        if (account != null) "$provider · $account" else provider
+                    }
+                    Text(
+                        text = stringResource(R.string.calendars_unassigned_warning, names),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MacColors.secondaryLabel,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                    )
                 }
             }
         }
@@ -213,50 +242,25 @@ private fun AccountSlotCard(
     val defaultCal = slot.defaultEventCalendarId?.let { byId[it] }
         ?: slot.eventCalendarIds.firstOrNull()?.let { byId[it] }
     val name = defaultCal?.displayName?.ifBlank { null }
+        ?: slot.accountName?.takeIf { it.isNotBlank() }
         ?: stringResource(R.string.calendars_slot_empty)
     val number = stringResource(R.string.calendars_slot_number, index + 1)
     val selected = state.activeIndex == index && slot.isConfigured
 
-    Column(
-        modifier = modifier.padding(horizontal = 4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) MacColors.windowBackground else Color.Transparent)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         val openLabel = stringResource(R.string.calendars_slot_open, name)
         val activateLabel = stringResource(
             if (selected) R.string.calendars_slot_active else R.string.calendars_slot_activate,
             name,
         )
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .semantics { contentDescription = openLabel }
-                .clickable(onClick = onOpen),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = number,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MacColors.primaryLabel,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(20.dp),
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = name,
-                style = MaterialTheme.typography.bodySmall,
-                color = MacColors.secondaryLabel,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(16.dp),
-            )
-        }
-        Spacer(modifier = Modifier.height(8.dp))
+        // Радио-кнопка активного слота
         val fill = if (selected) MacColors.accentBlue else Color.Transparent
         val stroke = if (selected) MacColors.accentBlue else MacColors.separator
         Box(
@@ -284,6 +288,27 @@ private fun AccountSlotCard(
                     )
                 }
             }
+        }
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = 12.dp)
+                .semantics { contentDescription = openLabel }
+                .clickable(onClick = onOpen),
+        ) {
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MacColors.primaryLabel,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = number,
+                style = MaterialTheme.typography.bodySmall,
+                color = MacColors.secondaryLabel,
+                maxLines = 1,
+            )
         }
     }
 }
