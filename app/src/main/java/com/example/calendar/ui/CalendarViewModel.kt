@@ -252,7 +252,7 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
 
     private fun dualWriteVisibleFilter(slots: AccountSlotsState, calendars: List<WritableCalendar>) {
         val allIds = calendars.map { it.id }.toSet()
-        val selected = AccountSlots.eventFilterIds(slots) ?: allIds
+        val selected = AccountSlots.eventFilterIds(slots, calendars) ?: allIds
         visibleCalendarsPreferences.writeFilter(selected, allIds)
         _visibleCalendarsFilter.value = visibleCalendarsPreferences.readFilter()
     }

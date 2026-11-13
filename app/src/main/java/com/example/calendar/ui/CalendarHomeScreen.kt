@@ -177,6 +177,7 @@ fun CalendarHomeScreen(
     }
 
     var showAppSettingsSheet by remember { mutableStateOf(false) }
+    var showAccountDrawer by remember { mutableStateOf(false) }
     var section by rememberSaveable { mutableStateOf(AppSection.Calendar) }
     var monthEventsWeekStrip by rememberSaveable { mutableStateOf(true) }
     /** Режим недели/месяца для текущего месяца; чужой месяц с года его не затирает. */
@@ -257,7 +258,8 @@ fun CalendarHomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 12.dp),
+                .padding(horizontal = 12.dp)
+                .leftEdgeSwipeDrawerGesture { showAccountDrawer = true },
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
             if (section == AppSection.Calendar) {
@@ -532,6 +534,19 @@ fun CalendarHomeScreen(
                             showEventSheet = true
                         }
                     },
+                )
+            }
+            if (showAccountDrawer) {
+                AccountDrawerOverlay(
+                    state = accountSlots,
+                    calendars = deviceCalendars,
+                    onActivate = { index ->
+                        viewModel.applyAccountSlots(AccountSlots.setActive(accountSlots, index))
+                    },
+                    onOpenSettings = {
+                        section = AppSection.Settings
+                    },
+                    onDismiss = { showAccountDrawer = false },
                 )
             }
             if (showAppSettingsSheet) {

@@ -210,6 +210,73 @@ class AccountSlotsTest {
         assertFalse(clean.slot(0).isConfigured)
     }
 
+    @Test
+    fun normalize_autoAssignsNewAccountToFreeSlot() {
+        // Первый запуск: Google + локальный заняли слоты, DAVx5 ещё не настроен
+        val initialCalendars = listOf(
+            cal(1, "Личное", "personal@example.com", "com.google", primary = true),
+            cal(2, "Локальный", "Local", "LOCAL"),
+        )
+        val seeded = AccountSlots.seed(initialCalendars)
+        assertEquals(listOf(1L), seeded.slot(0).eventCalendarIds)
+        assertEquals(listOf(2L), seeded.slot(1).eventCalendarIds)
+
+        // DAVx5 появился после первого запуска — normalize должен выделить ему свободный слот
+        val withDavx = initialCalendars + listOf(
+            cal(7, "CalDAV Work", "work@nextcloud.local", "bitfire.at.davdroid", primary = true),
+            cal(8, "Задачи", "work@nextcloud.local", "bitfire.at.davdroid"),
+        )
+        val updated = AccountSlots.normalize(seeded, withDavx)
+        val davxSlot = updated.slots.firstOrNull { 7L in it.eventCalendarIds }
+        assertTrue("DAVx5 calendar must land in a free slot", davxSlot != null)
+        assertEquals(7L, davxSlot!!.defaultEventCalendarId)
+        assertEquals(8L, davxSlot.taskCalendarId)
+        // Прежние слоты не тронуты
+        assertEquals(listOf(1L), updated.slot(0).eventCalendarIds)
+        assertEquals(listOf(2L), updated.slot(1).eventCalendarIds)
+        // Активный слот сохраняется
+        assertEquals(seeded.activeIndex, updated.activeIndex)
+    }
+
+    @Test
+    fun eventFilterIds_includesUnslottedCalendarsWhenSlotsFull() {
+        // Все 6 слотов заняты, 7-й аккаунт (DAVx5) не влез — его события не прячем
+        val slots = (1..6).map { i ->
+            AccountSlot(eventCalendarIds = listOf(i.toLong()), defaultEventCalendarId = i.toLong())
+        }
+        val state = AccountSlotsState(slots, activeIndex = 0)
+        val calendars = slots.mapIndexed { i, slot ->
+            cal(slot.eventCalendarIds.first(), "Cal$i", "acc$i@example.com", "com.google", primary = true)
+        } + listOf(
+            cal(77, "DAVx5", "dav@nc.local", "bitfire.at.davdroid", primary = true),
+        )
+        val filter = AccountSlots.eventFilterIds(state, calendars)
+        assertEquals(setOf(1L, 77L), filter)
+    }
+
+    @Test
+    fun eventFilterIds_activeOnlyWhenAllCalendarsSlotted() {
+        val state = AccountSlotsState(
+            slots = listOf(
+                AccountSlot(eventCalendarIds = listOf(1, 2), defaultEventCalendarId = 1),
+            ),
+            activeIndex = 0,
+        )
+        val calendars = listOf(cal(1, "A", "a@x.com", "com.google"), cal(2, "B", "b@x.com", "com.google"))
+        // всё в слоте — фильтр только активный слот
+        assertEquals(setOf(1L, 2L), AccountSlots.eventFilterIds(state, calendars))
+        // без списка календарей поведение прежнее — только активный слот
+        assertEquals(setOf(1L, 2L), AccountSlots.eventFilterIds(state))
+    }
+
+    @Test
+    fun calendarAccountKind_detectsDavx() {
+        assertEquals(CalendarAccountKind.CalDav, AccountSlots.calendarAccountKind("bitfire.at.davdroid"))
+        assertEquals(CalendarAccountKind.CalDav, AccountSlots.calendarAccountKind("at.bitfire.davx5"))
+        assertEquals(CalendarAccountKind.Google, AccountSlots.calendarAccountKind("com.google"))
+        assertEquals(CalendarAccountKind.Local, AccountSlots.calendarAccountKind("LOCAL"))
+    }
+
     private fun cal(
         id: Long,
         name: String,
