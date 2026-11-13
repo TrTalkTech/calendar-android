@@ -247,7 +247,8 @@ class CalendarRepository(
                 if (rrule.isEmpty()) continue
                 val allDay = allDayIdx >= 0 && cursor.getIntOrNull(allDayIdx) == 1
                 val eventZone = if (allDay) {
-                    ZoneId.of("UTC")
+                    // как в eventOverlapsLocalDay: UTC-полночь → UTC, локальная полночь → зона устройства
+                    if (dtStart % 86_400_000L == 0L) ZoneId.of("UTC") else zone
                 } else {
                     val tzId = if (tzIdx >= 0) cursor.getStringOrNull(tzIdx) else null
                     runCatching { ZoneId.of(tzId ?: zone.id) }.getOrDefault(zone)
@@ -671,8 +672,12 @@ class CalendarRepository(
         zone: ZoneId = ZoneId.systemDefault(),
     ): Boolean {
         if (allDay) {
-            val startDay = Instant.ofEpochMilli(beginMillis).atZone(ZoneId.of("UTC")).toLocalDate()
-            val endExclusive = Instant.ofEpochMilli(endMillis).atZone(ZoneId.of("UTC")).toLocalDate()
+            // AOSP хранит all-day как полночь UTC, но часть синхронизаторов — как локальную полночь.
+            // Если begin выровнен по UTC-полуночи — считаем дни в UTC, иначе — в зоне устройства,
+            // иначе событие «сегодня» попадает во «вчера» (и наоборот) при смещении зоны.
+            val dayZone = if (beginMillis % 86_400_000L == 0L) ZoneId.of("UTC") else zone
+            val startDay = Instant.ofEpochMilli(beginMillis).atZone(dayZone).toLocalDate()
+            val endExclusive = Instant.ofEpochMilli(endMillis).atZone(dayZone).toLocalDate()
             val lastDay = endExclusive.minusDays(1)
             val day = Instant.ofEpochMilli(dayStartMillis).atZone(zone).toLocalDate()
             return !day.isBefore(startDay) && !day.isAfter(lastDay)

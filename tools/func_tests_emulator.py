@@ -198,7 +198,7 @@ def go_home() -> ET.Element:
         if has_text(root, "Готово") and has_text(root, "Календари карточки"):
             tap_text("Готово")
             continue
-        if has_text(root, "Готово") and not has_text(root, "Учётные записи"):
+        if has_text(root, "Готово") and not has_text(root, "Профили"):
             tap_text("Готово")
             continue
         if has_text(root, "✕"):
@@ -207,7 +207,7 @@ def go_home() -> ET.Element:
         if has_text(root, "Отмена"):
             tap_text("Отмена")
             continue
-        if has_text(root, "Учётные записи") or has_text(root, "Оформление") or has_text(root, "Светлое"):
+        if has_text(root, "Профили") or has_text(root, "Оформление") or has_text(root, "Светлое"):
             tap_text("Календарь")
             time.sleep(0.45)
             continue
@@ -279,7 +279,7 @@ def scroll_until(value: str, contains: bool = False, swipes: int = 6) -> ET.Elem
 def open_settings() -> ET.Element | None:
     tap_text("Настройки")
     return wait_dump(
-        lambda r: has_text(r, "Учётные записи")
+        lambda r: has_text(r, "Профили")
         or has_text(r, "Оформление")
         or has_text(r, "Светлое")
         or has_text(r, "Как в системе"),
@@ -492,7 +492,7 @@ def main() -> int:
     )
 
     # Account cards: no home switcher, then activate Local
-    home_switcher = has_text(home, "Учётные записи") or has_text(home, "Сделать активной: Локальный")
+    home_switcher = has_text(home, "Профили") or has_text(home, "Сделать активной: Локальный")
     record("T-SET-06b", not home_switcher, "no account switcher on home")
     set_root = open_settings()
     if set_root is not None:
@@ -513,9 +513,9 @@ def main() -> int:
             or has_text(theme, "Цвет"),
             "theme options",
         )
-        set_root = scroll_until("Учётные записи", swipes=5)
+        set_root = scroll_until("Профили", swipes=5)
         cards = (
-            has_text(set_root, "Учётные записи")
+            has_text(set_root, "Профили")
             and (
                 has_text(set_root, "Локальный")
                 or has_text(set_root, "Не выбран")
