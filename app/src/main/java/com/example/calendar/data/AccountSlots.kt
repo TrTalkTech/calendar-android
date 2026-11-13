@@ -1,10 +1,11 @@
 package com.example.calendar.data
 
-const val ACCOUNT_SLOT_COUNT = 3
+const val ACCOUNT_SLOT_COUNT = 10
 
 enum class CalendarAccountKind {
     Exchange,
     Google,
+    CalDav,
     Local,
     Other,
 }
@@ -44,6 +45,14 @@ object AccountSlots {
                 type.contains("office") ||
                 type.contains("microsoft") -> CalendarAccountKind.Exchange
             type.contains("google") -> CalendarAccountKind.Google
+            // DAVx5 и другие CalDAV-синхронизаторы
+            type.contains("davdroid") ||
+                type.contains("davx") ||
+                type.contains("caldav") ||
+                type.contains("carddav") ||
+                type.contains("nextcloud") ||
+                type.contains("owncloud") ||
+                type.contains("ecloud") -> CalendarAccountKind.CalDav
             type.isBlank() || type.contains("local") -> CalendarAccountKind.Local
             else -> CalendarAccountKind.Other
         }
@@ -79,10 +88,22 @@ object AccountSlots {
         return result
     }
 
-    fun eventFilterIds(state: AccountSlotsState): Set<Long>? {
+    /**
+     * Календари активного слота для списков событий.
+     * Если часть календарей устройства не попала ни в один слот (все слоты заняты,
+     * а аккаунтов больше шести) — показываем их вместе с активным слотом,
+     * чтобы события (например, DAVx5) не пропадали молча.
+     */
+    fun eventFilterIds(state: AccountSlotsState, calendars: List<WritableCalendar> = emptyList()): Set<Long>? {
         if (state.slots.none { it.isConfigured }) return null
-        val ids = state.active().eventCalendarIds.toSet()
-        return ids
+        val activeIds = state.active().eventCalendarIds.toSet()
+        if (calendars.isEmpty()) return activeIds
+        val slotted = usedIds(state)
+        val unslotted = calendars.eventCalendars()
+            .filter { it.id !in slotted }
+            .map { it.id }
+        if (unslotted.isEmpty()) return activeIds
+        return activeIds + unslotted
     }
 
     fun isExchangeSlot(slot: AccountSlot, calendars: List<WritableCalendar>): Boolean {
@@ -186,8 +207,8 @@ object AccountSlots {
         val available = calendars.map { it.id }.toSet()
         val eventIds = calendars.eventCalendars().map { it.id }.toSet()
         val taskIds = calendars.taskCalendars().map { it.id }.toSet()
-        val padded = (state.slots + List(ACCOUNT_SLOT_COUNT) { AccountSlot() }).take(ACCOUNT_SLOT_COUNT)
-        val seen = mutableSetOf<Long>()
+        var padded = (state.slots + List(ACCOUNT_SLOT_COUNT) { AccountSlot() }).take(ACCOUNT_SLOT_COUNT)
+        var seen = mutableSetOf<Long>()
         val cleaned = padded.map { slot ->
             val events = slot.eventCalendarIds.filter { id ->
                 id in available && id in eventIds && seen.add(id)
@@ -205,13 +226,59 @@ object AccountSlots {
                 taskCalendarId = task,
             )
         }
-        val configured = cleaned.indexOfFirst { it.isConfigured }
-        val active = if (cleaned.getOrNull(state.activeIndex)?.isConfigured == true) {
+        padded = cleaned
+
+        // Новые аккаунты (появились на устройстве после первого запуска, напр. DAVx5)
+        // автоматически занимают свободные слоты.
+        val withNewAccounts = assignNewAccounts(padded, calendars, seen)
+
+        val configured = withNewAccounts.indexOfFirst { it.isConfigured }
+        val active = if (withNewAccounts.getOrNull(state.activeIndex)?.isConfigured == true) {
             state.activeIndex
         } else {
             configured.takeIf { it >= 0 } ?: 0
         }
-        return AccountSlotsState(cleaned, active)
+        return AccountSlotsState(withNewAccounts, active)
+    }
+
+    /** Дозаполняет свободные слоты календарями аккаунтов, которых нет ни в одном слоте. */
+    private fun assignNewAccounts(
+        slots: List<AccountSlot>,
+        calendars: List<WritableCalendar>,
+        seen: MutableSet<Long>,
+    ): List<AccountSlot> {
+        val used = seen.toMutableSet()
+        val assignedGroups = slots.filter { it.isConfigured }
+            .mapNotNull { it.eventCalendarIds.firstOrNull() }
+            .mapNotNull { id -> calendars.find { c -> c.id == id } }
+            .map { "${it.accountType.orEmpty()}\u0000${it.accountName.orEmpty()}" }
+            .toSet()
+
+        val freshGroups = groupedByAccount(calendars)
+            .filter { group -> group.calendars.eventCalendars().isNotEmpty() }
+            .filterNot { group -> "${group.calendars.first().accountType.orEmpty()}\u0000${group.calendars.first().accountName.orEmpty()}" in assignedGroups }
+
+        if (freshGroups.isEmpty()) return slots
+
+        val result = slots.toMutableList()
+        for (group in freshGroups) {
+            val freeIndex = result.indexOfFirst { !it.isConfigured }
+            if (freeIndex < 0) break
+            val events = group.calendars.eventCalendars().filter { it.id !in used }
+            if (events.isEmpty()) continue
+            val task = group.calendars.taskCalendars()
+                .firstOrNull { it.canModifyEvents && it.id !in used }
+                ?: group.calendars.taskCalendars().firstOrNull { it.id !in used }
+            events.forEach { used += it.id }
+            task?.let { used += it.id }
+            val defaultId = events.firstOrNull { it.isPrimary }?.id ?: events.firstOrNull()?.id
+            result[freeIndex] = AccountSlot(
+                eventCalendarIds = events.map { it.id },
+                defaultEventCalendarId = defaultId,
+                taskCalendarId = task?.id,
+            )
+        }
+        return result
     }
 
     fun setActive(state: AccountSlotsState, index: Int): AccountSlotsState {
