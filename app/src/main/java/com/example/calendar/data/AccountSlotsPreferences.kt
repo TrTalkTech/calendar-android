@@ -14,6 +14,8 @@ class AccountSlotsPreferences(context: Context) {
                 eventCalendarIds = parseIds(prefs.getString(keyEvents(index), null)),
                 defaultEventCalendarId = prefs.getLong(keyDefault(index), -1L).takeIf { it > 0 },
                 taskCalendarId = prefs.getLong(keyTask(index), -1L).takeIf { it > 0 },
+                accountName = prefs.getString(keyAccountName(index), null)?.takeIf { it.isNotBlank() },
+                accountType = prefs.getString(keyAccountType(index), null)?.takeIf { it.isNotBlank() },
             )
         }
         val active = prefs.getInt(KEY_ACTIVE, 0).coerceIn(0, ACCOUNT_SLOT_COUNT - 1)
@@ -36,6 +38,16 @@ class AccountSlotsPreferences(context: Context) {
                 editor.putLong(keyTask(index), slot.taskCalendarId)
             } else {
                 editor.remove(keyTask(index))
+            }
+            if (!slot.accountName.isNullOrBlank()) {
+                editor.putString(keyAccountName(index), slot.accountName)
+            } else {
+                editor.remove(keyAccountName(index))
+            }
+            if (!slot.accountType.isNullOrBlank()) {
+                editor.putString(keyAccountType(index), slot.accountType)
+            } else {
+                editor.remove(keyAccountType(index))
             }
         }
         editor.commit()
@@ -66,5 +78,7 @@ class AccountSlotsPreferences(context: Context) {
         private fun keyEvents(index: Int) = "slot_${index}_events"
         private fun keyDefault(index: Int) = "slot_${index}_default"
         private fun keyTask(index: Int) = "slot_${index}_task"
+        private fun keyAccountName(index: Int) = "slot_${index}_account_name"
+        private fun keyAccountType(index: Int) = "slot_${index}_account_type"
     }
 }

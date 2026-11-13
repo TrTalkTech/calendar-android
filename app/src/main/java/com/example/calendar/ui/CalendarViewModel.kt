@@ -17,6 +17,7 @@ import com.example.calendar.CalendarPeriod
 import com.example.calendar.data.AccountSlots
 import com.example.calendar.data.AccountSlotsPreferences
 import com.example.calendar.data.AccountSlotsState
+import com.example.calendar.data.AppTaskMarker
 import com.example.calendar.data.CalendarBootstrapPreferences
 import com.example.calendar.data.CalendarDayEventsQuery
 import com.example.calendar.data.CalendarEvent
@@ -232,6 +233,7 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun loadPassesAcceptance(query: CalendarDayEventsQuery, date: LocalDate): Boolean {
+        if (query.needsInstancesRecovery) return false
         val pending = pendingEventsForDay(date)
         if (pending.isEmpty()) return true
         return pending.all { pendingEvent ->
@@ -304,14 +306,22 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
     ): Pair<CalendarDayEventsQuery, Map<LocalDate, List<Int>>> =
         withContext(Dispatchers.IO) {
             val eventFilter = eventListFilter(filter)
+            val app = getApplication<Application>()
             var query = repository.queryEventsForDay(
                 date,
                 visibleCalendarIds = eventFilter,
                 fallbackEvents = dayFallbackEvents(date),
             )
-            if (query.events.isEmpty() && eventFilter?.isEmpty() != true) {
+            val shouldWarm =
+                (query.events.isEmpty() && eventFilter?.isEmpty() != true) ||
+                    query.needsInstancesRecovery
+            if (shouldWarm) {
+                if (query.needsInstancesRecovery) {
+                    Log.i(TAG, "instances recovery for $date synthesized=${query.synthesizedRecurringEventIds}")
+                    CalendarProviderWarmup.requestCalendarSync(app)
+                }
                 CalendarProviderWarmup.warmInstancesCache(
-                    getApplication<Application>().contentResolver,
+                    app.contentResolver,
                     date,
                     dayZone,
                 )
@@ -325,14 +335,24 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
                 _accountSlots.value,
                 _deviceCalendars.value,
             )
+            val appTaskIds = AppTaskMarker.markedEventIds(
+                app.contentResolver,
+                query.events.map { it.eventId },
+            )
             val monthDots = repository.queryCalendarDotColorsForMonthGrid(
                 month,
                 visibleCalendarIds = eventFilter,
-                skipAllDayFreeOnCalendarIds = hideTaskCalendars,
+                skipAllDayFreeOnCalendarIds = emptySet(),
             )
             val contactDay = contactBirthdays.queryBirthdaysForDay(date, dayZone)
             val contactDotDates = contactBirthdays.queryBirthdayDatesForMonthGrid(month)
-            val visibleEvents = query.events.filterNot { it.isHiddenExchangeTask(hideTaskCalendars) }
+            val visibleEvents = query.events.filterNot { event ->
+                val hidden = event.isHiddenExchangeTask(hideTaskCalendars, appTaskIds)
+                if (hidden) {
+                    Log.d(TAG, "drop eventId=${event.eventId} reason=exchange-task")
+                }
+                hidden
+            }
             val mergedQuery = query.copy(events = visibleEvents).withMergedContactBirthdays(contactDay)
             val mergedDots = mergeContactBirthdayDots(monthDots, contactDotDates)
             mergedQuery to mergedDots
@@ -396,12 +416,17 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
                         _accountSlots.value,
                         _deviceCalendars.value,
                     )
-                    val events = repository.searchPastEvents(
+                    val raw = repository.searchPastEvents(
                         query = needle,
                         visibleCalendarIds = filter,
                         zone = dayZone,
                         today = today,
-                    ).filterNot { it.isHiddenExchangeTask(hideTaskCalendars) }
+                    )
+                    val appTaskIds = AppTaskMarker.markedEventIds(
+                        getApplication<Application>().contentResolver,
+                        raw.map { it.eventId },
+                    )
+                    val events = raw.filterNot { it.isHiddenExchangeTask(hideTaskCalendars, appTaskIds) }
                     val birthdays = contactBirthdays.searchPastBirthdays(needle, today, dayZone)
                     (events + birthdays)
                         .distinctBy { "${it.eventId}-${it.beginMillis}" }

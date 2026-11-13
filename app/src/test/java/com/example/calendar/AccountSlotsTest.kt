@@ -210,6 +210,41 @@ class AccountSlotsTest {
         assertFalse(clean.slot(0).isConfigured)
     }
 
+    @Test
+    fun normalize_refillsSlotByAccountIdentityAfterIdRemap() {
+        val dirty = AccountSlotsState(
+            slots = listOf(
+                AccountSlot(
+                    eventCalendarIds = listOf(10),
+                    defaultEventCalendarId = 10,
+                    taskCalendarId = 11,
+                    accountName = "work@example.com",
+                    accountType = "com.google.android.gm.exchange",
+                ),
+                AccountSlot(
+                    eventCalendarIds = listOf(20),
+                    defaultEventCalendarId = 20,
+                    accountName = "personal@example.com",
+                    accountType = "com.google",
+                ),
+                AccountSlot(),
+            ),
+            activeIndex = 0,
+        )
+        val remapped = listOf(
+            cal(30, "Work", "work@example.com", "com.google.android.gm.exchange", primary = true),
+            cal(31, "Tasks", "work@example.com", "com.google.android.gm.exchange"),
+            cal(20, "Личное", "personal@example.com", "com.google"),
+        )
+        val clean = AccountSlots.normalize(dirty, remapped)
+        assertEquals(listOf(30L), clean.slot(0).eventCalendarIds)
+        assertEquals(30L, clean.slot(0).defaultEventCalendarId)
+        assertEquals(31L, clean.slot(0).taskCalendarId)
+        assertEquals(0, clean.activeIndex)
+        assertEquals(setOf(30L), AccountSlots.eventFilterIds(clean))
+        assertEquals(listOf(20L), clean.slot(1).eventCalendarIds)
+    }
+
     private fun cal(
         id: Long,
         name: String,

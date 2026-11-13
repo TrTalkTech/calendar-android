@@ -132,7 +132,9 @@ class CalendarTaskRepository(
             reminderMinutesBefore = reminderMinutesBefore,
             availability = CalendarContract.Events.AVAILABILITY_FREE,
         ) ?: return null
-        return ContentUris.parseId(uri)
+        val eventId = ContentUris.parseId(uri)
+        AppTaskMarker.mark(contentResolver, eventId)
+        return eventId
     }
 
     fun setTaskDone(eventId: Long, done: Boolean): Boolean {
@@ -175,7 +177,7 @@ class CalendarTaskRepository(
         val visible = title.trim().ifBlank { "Задача" }
         val storedTitle = if (done) doneTitle(visible) else visible
         val start = date.atStartOfDay()
-        return eventWriter.updateEvent(
+        val updated = eventWriter.updateEvent(
             eventId = eventId,
             calendarId = calendarId,
             title = storedTitle,
@@ -187,6 +189,8 @@ class CalendarTaskRepository(
             end = start,
             reminderMinutesBefore = reminderMinutesBefore,
         ) >= 0
+        if (updated) AppTaskMarker.mark(contentResolver, eventId)
+        return updated
     }
 
     fun deleteTask(eventId: Long): Boolean = eventWriter.deleteEntireEvent(eventId)

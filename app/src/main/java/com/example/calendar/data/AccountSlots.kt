@@ -19,8 +19,19 @@ data class AccountSlot(
     val eventCalendarIds: List<Long> = emptyList(),
     val defaultEventCalendarId: Long? = null,
     val taskCalendarId: Long? = null,
+    /** Стабильный ключ аккаунта: переживает смену provider `_ID` после remove/add. */
+    val accountName: String? = null,
+    val accountType: String? = null,
 ) {
     val isConfigured: Boolean get() = eventCalendarIds.isNotEmpty()
+
+    val accountKey: String?
+        get() {
+            val name = accountName?.trim().orEmpty()
+            val type = accountType?.trim().orEmpty()
+            if (name.isEmpty() && type.isEmpty()) return null
+            return "$type\u0000$name"
+        }
 }
 
 data class AccountSlotsState(
@@ -156,6 +167,8 @@ object AccountSlots {
                 eventCalendarIds = events.map { it.id },
                 defaultEventCalendarId = defaultId,
                 taskCalendarId = task?.id,
+                accountName = group.accountName.takeIf { it.isNotEmpty() },
+                accountType = group.calendars.firstOrNull()?.accountType,
             )
         }
         val byId = calendars.associateBy { it.id }
@@ -186,14 +199,18 @@ object AccountSlots {
         val available = calendars.map { it.id }.toSet()
         val eventIds = calendars.eventCalendars().map { it.id }.toSet()
         val taskIds = calendars.taskCalendars().map { it.id }.toSet()
+        val byId = calendars.associateBy { it.id }
+        val groupsByKey = groupedByAccount(calendars).associateBy { groupAccountKey(it) }
         val padded = (state.slots + List(ACCOUNT_SLOT_COUNT) { AccountSlot() }).take(ACCOUNT_SLOT_COUNT)
-        val seen = mutableSetOf<Long>()
-        val cleaned = padded.map { slot ->
+
+        // 1) Снять мёртвые id, сохранить/восстановить account identity.
+        val dropped = padded.map { slot ->
+            val identity = resolveIdentity(slot, byId)
             val events = slot.eventCalendarIds.filter { id ->
-                id in available && id in eventIds && seen.add(id)
+                id in available && id in eventIds
             }
             val task = slot.taskCalendarId?.takeIf { id ->
-                id in available && id in taskIds && seen.add(id)
+                id in available && id in taskIds
             }
             val default = when {
                 slot.defaultEventCalendarId in events -> slot.defaultEventCalendarId
@@ -203,15 +220,92 @@ object AccountSlots {
                 eventCalendarIds = events,
                 defaultEventCalendarId = default,
                 taskCalendarId = task,
+                accountName = identity?.first,
+                accountType = identity?.second,
             )
         }
-        val configured = cleaned.indexOfFirst { it.isConfigured }
-        val active = if (cleaned.getOrNull(state.activeIndex)?.isConfigured == true) {
+
+        // 2) Пустой слот с identity → заново наполнить календарями этого аккаунта (remove/add).
+        val claimedKeys = mutableSetOf<String>()
+        val refilled = dropped.map { slot ->
+            val key = slot.accountKey
+            if (slot.isConfigured) {
+                key?.let { claimedKeys += it }
+                return@map ensureIdentity(slot, byId)
+            }
+            if (key == null || key in claimedKeys) return@map slot
+            val group = groupsByKey[key] ?: return@map slot
+            claimedKeys += key
+            refillSlotFromGroup(group)
+        }
+
+        // 3) Эксклюзивность id между слотами.
+        val seen = mutableSetOf<Long>()
+        val exclusive = refilled.map { slot ->
+            val events = slot.eventCalendarIds.filter { id -> seen.add(id) }
+            val task = slot.taskCalendarId?.takeIf { id -> seen.add(id) }
+            val default = when {
+                slot.defaultEventCalendarId in events -> slot.defaultEventCalendarId
+                else -> events.firstOrNull()
+            }
+            slot.copy(
+                eventCalendarIds = events,
+                defaultEventCalendarId = default,
+                taskCalendarId = task,
+            )
+        }
+
+        val configured = exclusive.indexOfFirst { it.isConfigured }
+        val active = if (exclusive.getOrNull(state.activeIndex)?.isConfigured == true) {
             state.activeIndex
         } else {
             configured.takeIf { it >= 0 } ?: 0
         }
-        return AccountSlotsState(cleaned, active)
+        return AccountSlotsState(exclusive, active)
+    }
+
+    private fun groupAccountKey(group: CalendarAccountGroup): String =
+        "${group.calendars.firstOrNull()?.accountType.orEmpty()}\u0000${group.accountName}"
+
+    private fun resolveIdentity(
+        slot: AccountSlot,
+        byId: Map<Long, WritableCalendar>,
+    ): Pair<String, String>? {
+        val storedName = slot.accountName?.trim().orEmpty()
+        val storedType = slot.accountType?.trim().orEmpty()
+        if (storedName.isNotEmpty() || storedType.isNotEmpty()) {
+            return storedName to storedType
+        }
+        val sampleId = slot.eventCalendarIds.firstOrNull()
+            ?: slot.defaultEventCalendarId
+            ?: slot.taskCalendarId
+            ?: return null
+        val cal = byId[sampleId] ?: return null
+        return cal.accountName.orEmpty() to cal.accountType.orEmpty()
+    }
+
+    private fun ensureIdentity(
+        slot: AccountSlot,
+        byId: Map<Long, WritableCalendar>,
+    ): AccountSlot {
+        if (slot.accountKey != null) return slot
+        val identity = resolveIdentity(slot, byId) ?: return slot
+        return slot.copy(accountName = identity.first, accountType = identity.second)
+    }
+
+    private fun refillSlotFromGroup(group: CalendarAccountGroup): AccountSlot {
+        val events = group.calendars.eventCalendars()
+        val task = group.calendars.taskCalendars()
+            .firstOrNull { it.canModifyEvents }
+            ?: group.calendars.taskCalendars().firstOrNull()
+        val defaultId = events.firstOrNull { it.isPrimary }?.id ?: events.firstOrNull()?.id
+        return AccountSlot(
+            eventCalendarIds = events.map { it.id },
+            defaultEventCalendarId = defaultId,
+            taskCalendarId = task?.id,
+            accountName = group.accountName.takeIf { it.isNotEmpty() },
+            accountType = group.calendars.firstOrNull()?.accountType,
+        )
     }
 
     fun setActive(state: AccountSlotsState, index: Int): AccountSlotsState {
@@ -281,7 +375,11 @@ object AccountSlots {
                 else -> slot.defaultEventCalendarId
             }
             val task = slot.taskCalendarId.takeIf { it != calendarId }
-            AccountSlot(events, default, task)
+            slot.copy(
+                eventCalendarIds = events,
+                defaultEventCalendarId = default,
+                taskCalendarId = task,
+            )
         }
         return state.copy(slots = slots)
     }

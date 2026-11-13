@@ -21,6 +21,7 @@ import com.example.calendar.MainActivity
 import com.example.calendar.R
 import com.example.calendar.data.AccountSlots
 import com.example.calendar.data.AccountSlotsPreferences
+import com.example.calendar.data.AppTaskMarker
 import com.example.calendar.data.CalendarEvent
 import com.example.calendar.data.CalendarEventWriter
 import com.example.calendar.data.CalendarRepository
@@ -146,10 +147,15 @@ private fun loadTodayEvents(context: Context, today: LocalDate): List<CalendarEv
         )
         val slots = AccountSlotsPreferences(context).readOrSeed(calendars)
         val hideTasks = AccountSlots.exchangeTaskWriteCalendarIds(slots, calendars)
-        CalendarRepository(context.contentResolver, context).queryEventsForDay(
+        val dayEvents = CalendarRepository(context.contentResolver, context).queryEventsForDay(
             date = today,
             visibleCalendarIds = filter,
-        ).events.filterNot { it.isHiddenExchangeTask(hideTasks) }
+        ).events
+        val appTaskIds = AppTaskMarker.markedEventIds(
+            context.contentResolver,
+            dayEvents.map { it.eventId },
+        )
+        dayEvents.filterNot { it.isHiddenExchangeTask(hideTasks, appTaskIds) }
     } catch (_: SecurityException) {
         emptyList()
     } catch (_: Exception) {
