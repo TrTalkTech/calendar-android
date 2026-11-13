@@ -24,8 +24,8 @@ android {
         applicationId = "ru.laktapp.calendar"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.04.1"
+        versionCode = 6
+        versionName = "1.05"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
