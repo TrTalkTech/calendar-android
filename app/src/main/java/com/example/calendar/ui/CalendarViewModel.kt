@@ -233,7 +233,8 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun loadPassesAcceptance(query: CalendarDayEventsQuery, date: LocalDate): Boolean {
-        if (query.needsInstancesRecovery) return false
+        // Синтезированные occurrences уже показаны пользователю; догонять провайдер
+        // (sync + warmup + retry-лестница) не нужно — свежие данные придёт через ContentObserver.
         val pending = pendingEventsForDay(date)
         if (pending.isEmpty()) return true
         return pending.all { pendingEvent ->
@@ -312,14 +313,15 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
                 visibleCalendarIds = eventFilter,
                 fallbackEvents = dayFallbackEvents(date),
             )
-            val shouldWarm =
-                (query.events.isEmpty() && eventFilter?.isEmpty() != true) ||
-                    query.needsInstancesRecovery
-            if (shouldWarm) {
-                if (query.needsInstancesRecovery) {
-                    Log.i(TAG, "instances recovery for $date synthesized=${query.synthesizedRecurringEventIds}")
-                    CalendarProviderWarmup.requestCalendarSync(app)
-                }
+            val dayLooksEmpty = query.events.isEmpty() && eventFilter?.isEmpty() != true
+            if (query.needsInstancesRecovery) {
+                Log.i(TAG, "instances recovery for $date synthesized=${query.synthesizedRecurringEventIds}")
+                // Асинхронный запрос sync: провайдер развернёт Instances, ContentObserver принесёт апдейт.
+                CalendarProviderWarmup.requestCalendarSync(app)
+            }
+            if (dayLooksEmpty) {
+                // Теплый кэш Instances только при подозрении на ложно-пустой день:
+                // 36-месячный скан не должен блокировать показ синтезированных occurrences.
                 CalendarProviderWarmup.warmInstancesCache(
                     app.contentResolver,
                     date,
@@ -569,7 +571,9 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
                         )
                     }.getOrDefault(emptyList())
                 }
-                CalendarProviderWarmup.awaitCalendarSync(accounts)
+                // Короткое ожидание: индикатор не должен висеть дольше пары секунд,
+                // свежие данные придут через ContentObserver и так.
+                CalendarProviderWarmup.awaitCalendarSync(accounts, timeoutMs = 4_000L)
                 if (generation != eventsLoadGeneration) return@launch
                 reloadSelectedDay(generation, showLoading = false)
             } catch (_: Exception) {
@@ -579,9 +583,9 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
             } finally {
-                if (generation == eventsLoadGeneration) {
-                    _isRefreshingCalendars.value = false
-                }
+                // Безусловно: генерацию сбрасывает сам sync через ContentObserver
+                // (loadEventsForSelectedDay), и guarded-reset оставлял индикатор крутиться вечно.
+                _isRefreshingCalendars.value = false
             }
         }
     }
@@ -595,24 +599,20 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
             val date = _selectedDate.value
             val month = _visibleMonth.value
             var filter = resolveVisibleFilter()
-            val waitsMs = longArrayOf(0L, 800L, 2_000L, 5_000L)
-            var query: CalendarDayEventsQuery? = null
-            var dots = _monthDotColorsByDay.value
+            val waitsMs = longArrayOf(0L, 800L, 2_000L)
             for (waitMs in waitsMs) {
                 if (waitMs > 0) delay(waitMs)
                 if (generation != eventsLoadGeneration) return
-                val loaded = loadDayAndMonthDots(
+                val (query, dots) = loadDayAndMonthDots(
                     date = date,
                     month = month,
                     filter = filter,
                 )
-                query = loaded.first
-                dots = loaded.second
+                if (generation != eventsLoadGeneration) return
+                applyLoadedDay(query, dots, date)
                 filter = resolveVisibleFilter()
                 if (loadPassesAcceptance(query, date)) break
             }
-            if (generation != eventsLoadGeneration) return
-            query?.let { applyLoadedDay(it, dots, date) }
         } finally {
             if (showLoading && generation == eventsLoadGeneration) {
                 _isLoadingEvents.value = false

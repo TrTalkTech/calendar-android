@@ -170,7 +170,7 @@
     <string name="dialog_done">Готово</string>
     <string name="calendars_cd">Календари</string>
     <string name="calendars_sheet_title">Календари</string>
-    <string name="calendars_accounts_title">Учётные записи</string>
+    <string name="calendars_accounts_title">Профили</string>
     <string name="calendars_unassigned_warning">Нет свободной карточки для: %1$s. Освободите слот или снимите лишний аккаунт — иначе события этих календарей не попадут в активный профиль.</string>
     <string name="calendars_provider_caldav">CalDAV</string>
     <string name="calendars_slot_number">№%1$d</string>

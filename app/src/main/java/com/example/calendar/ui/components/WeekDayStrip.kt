@@ -169,8 +169,10 @@ private fun WeekStripDayCell(
             textAlign = TextAlign.Center,
             maxLines = 1,
         )
+        // Слот под точки резервируется всегда: прямоугольник выделения должен быть
+        // одного размера у дней с точками и без них.
+        Spacer(modifier = Modifier.height(4.dp))
         if (dayDotColors.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(4.dp))
             Row(
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -184,6 +186,8 @@ private fun WeekStripDayCell(
                     )
                 }
             }
+        } else {
+            Spacer(modifier = Modifier.height(StripDotSize))
         }
     }
 }
