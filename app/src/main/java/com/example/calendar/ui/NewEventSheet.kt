@@ -3,7 +3,9 @@
 package com.example.calendar.ui
 
 import android.app.DatePickerDialog
+import android.app.TimePickerDialog
 import android.content.ContentUris
+import android.view.ContextThemeWrapper
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -1853,11 +1855,11 @@ private fun LocationFieldWithSuggestion(
     var suggestions by remember { mutableStateOf<List<YandexPlaceSuggestion>>(emptyList()) }
     var selectedAddress by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(value, readOnly) {
-        val query = value.trim()
+        val query = EventLocationMaps.humanLocationLabel(value).ifBlank { value.trim() }
         if (
             readOnly ||
             query.length < 2 ||
-            query == selectedAddress ||
+            value.trim() == selectedAddress ||
             !EventLocationMaps.canShowEmbeddedMap(query)
         ) {
             suggestions = emptyList()
@@ -1865,7 +1867,10 @@ private fun LocationFieldWithSuggestion(
         }
         delay(350)
         suggestions = EventLocationMaps.suggestPlaces(query)
-            .filterNot { it.address.equals(query, ignoreCase = true) }
+            .filterNot {
+                it.address.equals(query, ignoreCase = true) ||
+                    EventLocationMaps.displayLabel(it).equals(query, ignoreCase = true)
+            }
             .take(8)
     }
     IosPlainField(
@@ -1896,9 +1901,10 @@ private fun LocationFieldWithSuggestion(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            selectedAddress = place.address
+                            val stored = EventLocationMaps.storageLocation(place)
+                            selectedAddress = stored
                             suggestions = emptyList()
-                            onValueChange(place.address)
+                            onValueChange(stored)
                         }
                         .padding(horizontal = 16.dp, vertical = 10.dp),
                 ) {
@@ -1970,25 +1976,44 @@ private fun DateTimeRow(
                 )
             }
             if (time != null) {
-                if (interactive && onTimeChange != null) {
-                    EventTimeCompactField(
-                        value = time,
-                        onValueChange = onTimeChange,
-                        enabled = true,
+                val context = LocalContext.current
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MacColors.segmentBackground)
+                        .then(
+                            if (interactive && onTimeChange != null) {
+                                Modifier.clickable {
+                                    // Holo → классические «крутилки» часов/минут (24ч).
+                                    val themed = ContextThemeWrapper(
+                                        context,
+                                        android.R.style.Theme_Holo_Light_Dialog_NoActionBar,
+                                    )
+                                    TimePickerDialog(
+                                        themed,
+                                        { _, hourOfDay, minute ->
+                                            onTimeChange(
+                                                LocalTime.of(hourOfDay, minute)
+                                                    .withSecond(0)
+                                                    .withNano(0),
+                                            )
+                                        },
+                                        time.hour,
+                                        time.minute,
+                                        true,
+                                    ).show()
+                                }
+                            } else {
+                                Modifier
+                            },
+                        ),
+                ) {
+                    Text(
+                        text = formatEventTime(time),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MacColors.primaryLabel,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                     )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MacColors.segmentBackground),
-                    ) {
-                        Text(
-                            text = formatEventTime(time),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MacColors.primaryLabel,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                        )
-                    }
                 }
             }
         }

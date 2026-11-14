@@ -223,8 +223,9 @@ fun EventViewBody(
     val context = LocalContext.current
     val locale = AppLocale.display
     val trimmedLocation = location.trim()
-    val joinUrl = EventConferenceLinks.joinUrl(trimmedLocation, notes, url)
-    val link = joinUrl ?: locationAsUrl(trimmedLocation)
+    val humanLocation = EventLocationMaps.humanLocationLabel(trimmedLocation)
+    val joinUrl = EventConferenceLinks.joinUrl(humanLocation, notes, url)
+    val link = joinUrl ?: locationAsUrl(humanLocation)
     val canMap = EventLocationMaps.canShowEmbeddedMap(trimmedLocation)
     var place by remember(trimmedLocation) { mutableStateOf<ResolvedEventPlace?>(null) }
     LaunchedEffect(trimmedLocation, locale) {
@@ -234,8 +235,8 @@ fun EventViewBody(
             null
         }
     }
-    val addressLines = place?.lines?.takeIf { it.isNotEmpty() }
-        ?: listOf(trimmedLocation).filter { it.isNotEmpty() }
+    // Всегда показываем сохранённую подпись; resolvePlace только для карты/координат.
+    val addressLines = EventLocationMaps.displayLines(trimmedLocation)
     val barColor = calendarColor?.let { Color(it) } ?: MacColors.accentBlue
     val showTimeline = !allDay &&
         start.toLocalDate() == end.toLocalDate() &&
@@ -311,7 +312,7 @@ fun EventViewBody(
                     start = start,
                     end = end,
                     title = title.ifBlank { stringResource(R.string.event_no_title) },
-                    location = trimmedLocation,
+                    location = humanLocation,
                     color = barColor,
                     showPeople = invitees.isNotEmpty(),
                 )
