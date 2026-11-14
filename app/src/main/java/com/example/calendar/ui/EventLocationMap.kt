@@ -65,6 +65,16 @@ object EventLocationMaps {
 
     private val HouseWordPattern = Regex("""(?i)(?:дом|д)\.?\s*(\d+\p{L}?)""")
     private val TrailingHousePattern = Regex("""(?:^|\s)(\d+\p{L}?)$""")
+    /** Якорь координат после выбора подсказки: «Название @lon,lat». */
+    private val AnchoredCoordsPattern = Regex(
+        """\s*@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\s*$""",
+    )
+    private val YandexMapsUrlPattern = Regex(
+        """(?i)\s*https?://(?:[\w.-]+\.)?yandex\.(?:ru|com)/maps/\S*""",
+    )
+    private val YandexMapsPtInUrlPattern = Regex(
+        """(?i)[?&]pt=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)""",
+    )
 
     private val AddressStopWords = setOf(
         "дом", "улица", "город", "проспект", "переулок", "шоссе", "набережная",
@@ -75,10 +85,77 @@ object EventLocationMaps {
     fun canShowEmbeddedMap(location: String): Boolean {
         val trimmed = location.trim()
         if (trimmed.isEmpty()) return false
-        val lower = trimmed.lowercase(Locale.ROOT)
+        if (anchoredCoordinates(trimmed) != null) return true
+        val human = humanLocationLabel(trimmed)
+        if (human.isEmpty()) return false
+        val lower = human.lowercase(Locale.ROOT)
         if (lower.startsWith("http://") || lower.startsWith("https://")) return false
-        if (EventConferenceLinks.isConferenceLocation(trimmed)) return false
+        if (EventConferenceLinks.isConferenceLocation(human)) return false
         return true
+    }
+
+    /** Подпись из строки подсказки (title + subtitle), без сырого Yandex `text`. */
+    fun displayLabel(place: YandexPlaceSuggestion): String {
+        val title = place.title.trim()
+        val subtitle = place.subtitle.trim()
+        return when {
+            title.isNotEmpty() && subtitle.isNotEmpty() -> "$title, $subtitle"
+            title.isNotEmpty() -> title
+            subtitle.isNotEmpty() -> subtitle
+            else -> place.address.trim()
+        }
+    }
+
+    /**
+     * Что писать в [CalendarContract.Events.EVENT_LOCATION] после тапа по подсказке:
+     * человекочитаемое имя + якорь координат, чтобы карта не угадывала другой топоним.
+     */
+    fun storageLocation(place: YandexPlaceSuggestion): String {
+        val label = displayLabel(place)
+        val lon = place.longitude
+        val lat = place.latitude
+        if (lon == null || lat == null) return label
+        return appendAnchoredCoordinates(label, lon, lat)
+    }
+
+    /** Убирает якорь координат / maps-URL — для отображения в карточке и поле. */
+    fun humanLocationLabel(location: String): String {
+        var text = location.trim()
+        if (text.isEmpty()) return ""
+        text = AnchoredCoordsPattern.replace(text, "").trim()
+        text = YandexMapsUrlPattern.replace(text, "").trim()
+        text = text.replace(Regex("""\s*\n+\s*"""), " ").trim()
+        return text.trim(',', ' ', '·')
+    }
+
+    fun anchoredCoordinates(location: String): Pair<Double, Double>? {
+        val trimmed = location.trim()
+        AnchoredCoordsPattern.find(trimmed)?.let { match ->
+            val lon = match.groupValues[1].toDoubleOrNull() ?: return@let
+            val lat = match.groupValues[2].toDoubleOrNull() ?: return@let
+            if (lat in -90.0..90.0 && lon in -180.0..180.0) return lon to lat
+        }
+        YandexMapsUrlPattern.find(trimmed)?.let { urlMatch ->
+            YandexMapsPtInUrlPattern.find(urlMatch.value)?.let { match ->
+                val lon = match.groupValues[1].toDoubleOrNull() ?: return@let
+                val lat = match.groupValues[2].toDoubleOrNull() ?: return@let
+                if (lat in -90.0..90.0 && lon in -180.0..180.0) return lon to lat
+            }
+        }
+        return null
+    }
+
+    fun appendAnchoredCoordinates(label: String, longitude: Double, latitude: Double): String {
+        val base = humanLocationLabel(label).ifBlank { label.trim() }
+        val lon = String.format(Locale.US, "%.6f", longitude)
+        val lat = String.format(Locale.US, "%.6f", latitude)
+        return "$base @$lon,$lat"
+    }
+
+    /** Строки для UI: всегда сохранённая подпись, без подмены через suggest. */
+    fun displayLines(location: String): List<String> {
+        val human = humanLocationLabel(location)
+        return if (human.isNotEmpty()) listOf(human) else emptyList()
     }
 
     suspend fun loadPreview(
@@ -105,11 +182,25 @@ object EventLocationMaps {
     ): ResolvedEventPlace? = withContext(Dispatchers.IO) {
         val trimmed = location.trim()
         if (!canShowEmbeddedMap(trimmed)) return@withContext null
-        val tokens = distinctiveTokens(trimmed)
+        val human = humanLocationLabel(trimmed)
+        val anchored = anchoredCoordinates(trimmed)
+        if (anchored != null) {
+            return@withContext ResolvedEventPlace(
+                lines = listOf(human).filter { it.isNotEmpty() }.ifEmpty { listOf(trimmed) },
+                longitude = anchored.first,
+                latitude = anchored.second,
+            )
+        }
+        val tokens = distinctiveTokens(human.ifEmpty { trimmed })
         if (tokens.isEmpty()) return@withContext null
-        for (query in addressQueryVariants(trimmed)) {
+        for (query in addressQueryVariants(human.ifEmpty { trimmed })) {
             val place = yandexSuggestPlace(query, tokens)
-            if (place != null) return@withContext place
+            if (place != null) {
+                // Координаты для карты — из suggest, подпись оставляем сохранённой строкой.
+                return@withContext place.copy(
+                    lines = listOf(human).filter { it.isNotEmpty() }.ifEmpty { place.lines },
+                )
+            }
         }
         null
     }
