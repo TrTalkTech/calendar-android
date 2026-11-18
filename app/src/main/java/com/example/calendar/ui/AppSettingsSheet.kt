@@ -61,6 +61,8 @@ fun AppSettingsSheet(
     onAccountSlotsChange: (AccountSlotsState) -> Unit,
     productionCalendarEnabled: Boolean,
     onProductionCalendarEnabledChange: (Boolean) -> Unit,
+    showCancelledEvents: Boolean,
+    onShowCancelledEventsChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -89,6 +91,8 @@ fun AppSettingsSheet(
             onAccountSlotsChange = onAccountSlotsChange,
             productionCalendarEnabled = productionCalendarEnabled,
             onProductionCalendarEnabledChange = onProductionCalendarEnabledChange,
+            showCancelledEvents = showCancelledEvents,
+            onShowCancelledEventsChange = onShowCancelledEventsChange,
             onDismiss = onDismiss,
             showClose = true,
             modifier = Modifier.heightIn(max = maxSheetHeight),
@@ -112,6 +116,8 @@ fun AppSettingsPage(
     onAccountSlotsChange: (AccountSlotsState) -> Unit,
     productionCalendarEnabled: Boolean,
     onProductionCalendarEnabledChange: (Boolean) -> Unit,
+    showCancelledEvents: Boolean,
+    onShowCancelledEventsChange: (Boolean) -> Unit,
     onDismiss: () -> Unit = {},
     showClose: Boolean = false,
     modifier: Modifier = Modifier,
@@ -184,6 +190,12 @@ fun AppSettingsPage(
             ProductionCalendarSection(
                 enabled = productionCalendarEnabled,
                 onEnabledChange = onProductionCalendarEnabledChange,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+
+            CancelledEventsSection(
+                showCancelled = showCancelledEvents,
+                onShowCancelledChange = onShowCancelledEventsChange,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
 

@@ -17,6 +17,8 @@ data class CalendarEvent(
     val availability: Int = 0,
     /** [android.provider.CalendarContract.Events.SELF_ATTENDEE_STATUS]. */
     val selfAttendeeStatus: Int = EventRsvp.STATUS_NONE,
+    /** Есть RRULE / серия повторений. */
+    val isRecurring: Boolean = false,
 )
 
 /** Результат выборки дня: события и id, реально пришедшие из провайдера (без fallback). */

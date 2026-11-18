@@ -22,15 +22,10 @@ import java.time.ZoneId
 import java.time.temporal.TemporalAdjusters
 import java.time.temporal.WeekFields
 
-/** Значение [CalendarContract.EventsColumns.STATUS_CANCELLED] (2) для SQL без зависимости от того, где объявлена константа. */
-private const val CALENDAR_EVENT_STATUS_CANCELLED = 2
-
-private val notCancelledSql =
-    "(${CalendarContract.Events.STATUS} IS NULL OR ${CalendarContract.Events.STATUS} != $CALENDAR_EVENT_STATUS_CANCELLED)"
-
 private val notDeclinedSql = EventRsvp.notDeclinedSql(CalendarContract.Events.SELF_ATTENDEE_STATUS)
 
-private val visibleEventSql = "$notCancelledSql AND $notDeclinedSql"
+private val notCancelledSql =
+    "(${CalendarContract.Events.STATUS} IS NULL OR ${CalendarContract.Events.STATUS} != ${EventCancelled.STATUS_CANCELLED})"
 
 private const val REPO_TAG = "CalendarRepository"
 
@@ -43,6 +38,20 @@ class CalendarRepository(
 
     /** Цвет точки в сетке, если у инстанса нет DISPLAY_COLOR. */
     private val fallbackDotColorArgb = 0xFF3478F6.toInt()
+
+    /**
+     * Показывать отменённые организатором встречи в повестке.
+     * Меняет ViewModel при переключении настройки; по умолчанию false.
+     */
+    @Volatile
+    var showCancelledEvents: Boolean = false
+
+    private fun visibleEventSql(): String =
+        if (showCancelledEvents) {
+            notDeclinedSql
+        } else {
+            "$notCancelledSql AND $notDeclinedSql"
+        }
 
     fun queryEventsForDay(
         date: LocalDate,
@@ -205,7 +214,7 @@ class CalendarRepository(
         calendarIdCache: MutableMap<Long, Long?>,
     ): RecurringMergeResult {
         val selection = "${CalendarContract.Events.DELETED} = ? AND " +
-            "$visibleEventSql AND " +
+            "${visibleEventSql()} AND " +
             "${CalendarContract.Events.RRULE} IS NOT NULL AND ${CalendarContract.Events.RRULE} != '' AND " +
             "${CalendarContract.Events.DTSTART} < ?"
         val projection = arrayOf(
@@ -221,7 +230,9 @@ class CalendarRepository(
             CalendarContract.Events.EVENT_LOCATION,
             CalendarContract.Events.SELF_ATTENDEE_STATUS,
             CalendarContract.Events.AVAILABILITY,
+            CalendarContract.Events.STATUS,
             CalendarContract.Events.RRULE,
+            CalendarContract.Events.EXDATE,
         )
         val synthesized = mutableSetOf<Long>()
         var needsRecovery = false
@@ -254,7 +265,13 @@ class CalendarRepository(
                     runCatching { ZoneId.of(tzId ?: zone.id) }.getOrDefault(zone)
                 }
                 val seriesStart = Instant.ofEpochMilli(dtStart).atZone(eventZone).toLocalDate()
-                if (!RRuleOccurrence.occursOn(rrule, seriesStart, day)) continue
+                val exdateIdx = cursor.getColumnIndex(CalendarContract.Events.EXDATE)
+                val exdates = if (exdateIdx >= 0) {
+                    RRuleOccurrence.parseExdates(cursor.getStringOrNull(exdateIdx))
+                } else {
+                    emptySet()
+                }
+                if (!RRuleOccurrence.occursOn(rrule, seriesStart, day, exdates)) continue
 
                 val calIdx = cursor.getColumnIndex(CalendarContract.Events.CALENDAR_ID)
                 var calendarId = if (calIdx >= 0) cursor.getLongOrNull(calIdx) else null
@@ -275,6 +292,14 @@ class CalendarRepository(
                     Log.d(REPO_TAG, "drop recurring master eventId=$eventId reason=declined")
                     continue
                 }
+                val titleIdxEarly = cursor.getColumnIndex(CalendarContract.Events.TITLE)
+                val masterTitle = if (titleIdxEarly >= 0) cursor.getStringOrNull(titleIdxEarly) else null
+                val statusIdx = cursor.getColumnIndex(CalendarContract.Events.STATUS)
+                val masterStatus = if (statusIdx >= 0) cursor.getIntOrNull(statusIdx) else null
+                if (EventCancelled.shouldHideFromAgenda(masterStatus, masterTitle, showCancelledEvents)) {
+                    Log.d(REPO_TAG, "drop recurring master eventId=$eventId reason=cancelled")
+                    continue
+                }
 
                 val fromInstances = LinkedHashMap<String, CalendarEvent>()
                 mergeInstancesFromWiderWindow(
@@ -287,24 +312,13 @@ class CalendarRepository(
                     calendarIdCache = calendarIdCache,
                 )
                 if (fromInstances.isNotEmpty()) {
-                    fromInstances.forEach { (key, event) -> results.putIfAbsent(key, event) }
+                    fromInstances.forEach { (key, event) ->
+                        results.putIfAbsent(key, event.copy(isRecurring = true))
+                    }
                     presentIds += eventId
                     continue
                 }
 
-                needsRecovery = true
-                val titleIdx = cursor.getColumnIndex(CalendarContract.Events.TITLE)
-                val title = if (titleIdx >= 0) {
-                    cursor.getStringOrNull(titleIdx)?.takeIf { it.isNotBlank() }
-                } else {
-                    null
-                } ?: untitledLabel
-                val colorIdx = cursor.getColumnIndex(CalendarContract.Events.EVENT_COLOR)
-                val color = if (colorIdx >= 0) cursor.getIntOrNull(colorIdx) else null
-                val locIdx = cursor.getColumnIndex(CalendarContract.Events.EVENT_LOCATION)
-                val location = if (locIdx >= 0) cursor.getStringOrNull(locIdx)?.trim().orEmpty() else ""
-                val availabilityIdx = cursor.getColumnIndex(CalendarContract.Events.AVAILABILITY)
-                val availability = if (availabilityIdx >= 0) cursor.getIntOrNull(availabilityIdx) ?: 0 else 0
                 val durationMs = cursor.eventEndMillisForOverlap(dtStart, allDay) - dtStart
                 val (begin, end) = occurrenceBoundsForDay(
                     day = day,
@@ -316,6 +330,31 @@ class CalendarRepository(
                 if (!eventOverlapsLocalDay(begin, end, allDay, dayStartMillis, dayEndMillis, zone)) {
                     continue
                 }
+                // Перенос/отмена одного дня: OEM/Instances уже убрали слот, а у нас есть
+                // exception с ORIGINAL_ID + ORIGINAL_INSTANCE_TIME на это вхождение.
+                if (hasRecurringInstanceException(
+                        originalEventId = eventId,
+                        instanceBeginMillis = begin,
+                        dayStartMillis = dayStartMillis,
+                        dayEndMillis = dayEndMillis,
+                    )
+                ) {
+                    Log.d(
+                        REPO_TAG,
+                        "drop recurring master eventId=$eventId reason=exception day=$day",
+                    )
+                    presentIds += eventId
+                    continue
+                }
+
+                needsRecovery = true
+                val title = masterTitle?.takeIf { it.isNotBlank() } ?: untitledLabel
+                val colorIdx = cursor.getColumnIndex(CalendarContract.Events.EVENT_COLOR)
+                val color = if (colorIdx >= 0) cursor.getIntOrNull(colorIdx) else null
+                val locIdx = cursor.getColumnIndex(CalendarContract.Events.EVENT_LOCATION)
+                val location = if (locIdx >= 0) cursor.getStringOrNull(locIdx)?.trim().orEmpty() else ""
+                val availabilityIdx = cursor.getColumnIndex(CalendarContract.Events.AVAILABILITY)
+                val availability = if (availabilityIdx >= 0) cursor.getIntOrNull(availabilityIdx) ?: 0 else 0
                 val synthesizedEvent = CalendarEvent(
                     eventId = eventId,
                     title = title,
@@ -328,6 +367,7 @@ class CalendarRepository(
                     location = location,
                     availability = availability,
                     selfAttendeeStatus = selfStatus,
+                    isRecurring = true,
                 )
                 val key = "${synthesizedEvent.eventId}-${synthesizedEvent.beginMillis}"
                 if (results.putIfAbsent(key, synthesizedEvent) == null) {
@@ -357,6 +397,41 @@ class CalendarRepository(
         val masterLocal = Instant.ofEpochMilli(masterStartMillis).atZone(eventZone).toLocalDateTime()
         val begin = day.atTime(masterLocal.toLocalTime()).atZone(eventZone).toInstant().toEpochMilli()
         return begin to begin + durationMillis
+    }
+
+    /**
+     * Есть ли exception/override для вхождения серии в этот день
+     * ([CalendarContract.Events.ORIGINAL_ID] + [CalendarContract.Events.ORIGINAL_INSTANCE_TIME]).
+     * Точное совпадение begin предпочтительнее; запасной вариант — любой ORIGINAL_INSTANCE_TIME в сутках.
+     */
+    private fun hasRecurringInstanceException(
+        originalEventId: Long,
+        instanceBeginMillis: Long,
+        dayStartMillis: Long,
+        dayEndMillis: Long,
+    ): Boolean {
+        val selection =
+            "${CalendarContract.Events.DELETED} = 0 AND " +
+                "${CalendarContract.Events.ORIGINAL_ID} = ? AND " +
+                "(" +
+                "${CalendarContract.Events.ORIGINAL_INSTANCE_TIME} = ? OR " +
+                "(" +
+                "${CalendarContract.Events.ORIGINAL_INSTANCE_TIME} >= ? AND " +
+                "${CalendarContract.Events.ORIGINAL_INSTANCE_TIME} < ?" +
+                ")" +
+                ")"
+        return contentResolver.query(
+            CalendarContract.Events.CONTENT_URI,
+            arrayOf(CalendarContract.Events._ID),
+            selection,
+            arrayOf(
+                originalEventId.toString(),
+                instanceBeginMillis.toString(),
+                dayStartMillis.toString(),
+                dayEndMillis.toString(),
+            ),
+            null,
+        )?.use { cursor -> cursor.moveToFirst() } == true
     }
 
     private fun attachAttendees(events: List<CalendarEvent>): List<CalendarEvent> {
@@ -456,7 +531,7 @@ class CalendarRepository(
         calendarIdCache: MutableMap<Long, Long?>,
     ) {
         val selection = "${CalendarContract.Events.DELETED} = ? AND " +
-            "$visibleEventSql AND " +
+            "${visibleEventSql()} AND " +
             "(${CalendarContract.Events.RRULE} IS NULL OR ${CalendarContract.Events.RRULE} = '') AND " +
             "${CalendarContract.Events.DTSTART} < ? AND " +
             "(${CalendarContract.Events.DTEND} IS NULL OR ${CalendarContract.Events.DTEND} > ?)"
@@ -477,6 +552,8 @@ class CalendarRepository(
             CalendarContract.Events.EVENT_LOCATION,
             CalendarContract.Events.SELF_ATTENDEE_STATUS,
             CalendarContract.Events.AVAILABILITY,
+            CalendarContract.Events.STATUS,
+            CalendarContract.Events.RRULE,
         )
         val sort = "${CalendarContract.Events.DTSTART} ASC"
 
@@ -612,6 +689,8 @@ class CalendarRepository(
             CalendarContract.Events.EVENT_LOCATION,
             CalendarContract.Events.SELF_ATTENDEE_STATUS,
             CalendarContract.Events.AVAILABILITY,
+            CalendarContract.Events.STATUS,
+            CalendarContract.Events.RRULE,
         )
         return contentResolver.query(
             ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, eventId),
@@ -717,11 +796,13 @@ class CalendarRepository(
         val id = getLongOrNull(idIdx) ?: return null
         val begin = getLongOrNull(startIdx) ?: return null
         val calId = if (calIdx >= 0) getLongOrNull(calIdx) else null
-        val title = if (titleIdx >= 0) {
-            getStringOrNull(titleIdx)?.takeIf { it.isNotBlank() }
-        } else {
-            null
-        } ?: untitledLabel
+        val rawTitle = if (titleIdx >= 0) getStringOrNull(titleIdx) else null
+        val title = rawTitle?.takeIf { it.isNotBlank() } ?: untitledLabel
+        val statusIdx = getColumnIndex(CalendarContract.Events.STATUS)
+        val status = if (statusIdx >= 0) getIntOrNull(statusIdx) else null
+        if (EventCancelled.shouldHideFromAgenda(status, rawTitle ?: title, showCancelledEvents)) {
+            return null
+        }
         val allDay = allDayIdx >= 0 && getIntOrNull(allDayIdx) == 1
         val color = if (colorIdx >= 0) getIntOrNull(colorIdx) else null
         val location = if (locationIdx >= 0) getStringOrNull(locationIdx)?.trim().orEmpty() else ""
@@ -734,6 +815,8 @@ class CalendarRepository(
         if (EventRsvp.shouldHideFromAgenda(selfAttendeeStatus)) return null
         val availabilityIdx = getColumnIndex(CalendarContract.Events.AVAILABILITY)
         val availability = if (availabilityIdx >= 0) getIntOrNull(availabilityIdx) ?: 0 else 0
+        val rruleIdx = getColumnIndex(CalendarContract.Events.RRULE)
+        val isRecurring = rruleIdx >= 0 && !getStringOrNull(rruleIdx).isNullOrBlank()
         val end = eventEndMillisForOverlap(begin, allDay)
         return CalendarEvent(
             eventId = id,
@@ -747,6 +830,7 @@ class CalendarRepository(
             location = location,
             availability = availability,
             selfAttendeeStatus = selfAttendeeStatus,
+            isRecurring = isRecurring,
         )
     }
 
@@ -818,6 +902,8 @@ class CalendarRepository(
             CalendarContract.Instances.SELF_ATTENDEE_STATUS,
             CalendarContract.Instances.ALL_DAY,
             CalendarContract.Instances.AVAILABILITY,
+            CalendarContract.Instances.TITLE,
+            CalendarContract.Events.STATUS,
         )
 
         val sort = "${CalendarContract.Instances.BEGIN} ASC"
@@ -835,6 +921,13 @@ class CalendarRepository(
                 if (declinedIdx >= 0 &&
                     EventRsvp.shouldHideFromAgenda(cursor.getIntOrNull(declinedIdx))
                 ) {
+                    continue
+                }
+                val titleIdx = cursor.getColumnIndex(CalendarContract.Instances.TITLE)
+                val title = if (titleIdx >= 0) cursor.getStringOrNull(titleIdx) else null
+                val statusIdx = cursor.getColumnIndex(CalendarContract.Events.STATUS)
+                val status = if (statusIdx >= 0) cursor.getIntOrNull(statusIdx) else null
+                if (EventCancelled.shouldHideFromAgenda(status, title, showCancelledEvents)) {
                     continue
                 }
                 val eventIdIdx = cursor.getColumnIndex(CalendarContract.Instances.EVENT_ID)
@@ -913,11 +1006,13 @@ class CalendarRepository(
         val end = getLongOrNull(endIdx) ?: return null
 
         val titleIdx = index(CalendarContract.Instances.TITLE)
-        val title = if (titleIdx >= 0) {
-            getStringOrNull(titleIdx)?.takeIf { it.isNotBlank() }
-        } else {
-            null
-        } ?: untitledLabel
+        val rawTitle = if (titleIdx >= 0) getStringOrNull(titleIdx) else null
+        val title = rawTitle?.takeIf { it.isNotBlank() } ?: untitledLabel
+        val statusIdx = index(CalendarContract.Events.STATUS)
+        val status = if (statusIdx >= 0) getIntOrNull(statusIdx) else null
+        if (EventCancelled.shouldHideFromAgenda(status, rawTitle ?: title, showCancelledEvents)) {
+            return null
+        }
 
         val allDayIdx = index(CalendarContract.Instances.ALL_DAY)
         val allDay = allDayIdx >= 0 && getIntOrNull(allDayIdx) == 1
@@ -945,6 +1040,9 @@ class CalendarRepository(
         val availabilityIdx = index(CalendarContract.Instances.AVAILABILITY)
         val availability = if (availabilityIdx >= 0) getIntOrNull(availabilityIdx) ?: 0 else 0
 
+        val rruleIdx = index(CalendarContract.Instances.RRULE)
+        val isRecurring = rruleIdx >= 0 && !getStringOrNull(rruleIdx).isNullOrBlank()
+
         return CalendarEvent(
             eventId = id,
             title = title,
@@ -957,6 +1055,7 @@ class CalendarRepository(
             location = location,
             availability = availability,
             selfAttendeeStatus = selfAttendeeStatus,
+            isRecurring = isRecurring,
         )
     }
 
@@ -972,6 +1071,8 @@ class CalendarRepository(
         CalendarContract.Instances.EVENT_LOCATION,
         CalendarContract.Instances.SELF_ATTENDEE_STATUS,
         CalendarContract.Instances.AVAILABILITY,
+        CalendarContract.Instances.RRULE,
+        CalendarContract.Events.STATUS,
     )
 
     /**
@@ -1035,7 +1136,7 @@ class CalendarRepository(
     ): Set<Long> {
         val selection = buildString {
             append("${CalendarContract.Events.DELETED} = ? AND ")
-            append(visibleEventSql)
+            append(visibleEventSql())
             if (visibleCalendarIds != null) {
                 append(" AND ${CalendarContract.Events.CALENDAR_ID} IN (${visibleCalendarIds.joinToString(",")})")
             }

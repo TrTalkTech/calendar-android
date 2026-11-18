@@ -27,6 +27,7 @@ import com.example.calendar.data.CalendarRepository
 import com.example.calendar.data.CalendarTask
 import com.example.calendar.data.CalendarTaskRepository
 import com.example.calendar.data.ContactBirthdaysRepository
+import com.example.calendar.data.CancelledEventsPreferences
 import com.example.calendar.data.ProductionCalendarPreferences
 import com.example.calendar.data.ProductionCalendarRepository
 import com.example.calendar.data.ProductionDay
@@ -70,6 +71,7 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
     private val accountSlotsPreferences = AccountSlotsPreferences(application)
     private val productionCalendarRepository = ProductionCalendarRepository(application)
     private val productionCalendarPreferences = ProductionCalendarPreferences(application)
+    private val cancelledEventsPreferences = CancelledEventsPreferences(application)
     private val bootstrapPreferences = CalendarBootstrapPreferences(application)
     private val eventWriter = CalendarEventWriter(application.contentResolver)
     private val taskRepository = CalendarTaskRepository(application.contentResolver, eventWriter)
@@ -157,10 +159,14 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
     private val _productionCalendarEnabled = MutableStateFlow(productionCalendarPreferences.readEnabled())
     val productionCalendarEnabled: StateFlow<Boolean> = _productionCalendarEnabled.asStateFlow()
 
+    private val _showCancelledEvents = MutableStateFlow(cancelledEventsPreferences.readShowCancelled())
+    val showCancelledEvents: StateFlow<Boolean> = _showCancelledEvents.asStateFlow()
+
     private val _productionDays = MutableStateFlow<Map<LocalDate, ProductionDay>>(emptyMap())
     val productionDays: StateFlow<Map<LocalDate, ProductionDay>> = _productionDays.asStateFlow()
 
     init {
+        repository.showCancelledEvents = _showCancelledEvents.value
         reloadProductionCalendar()
     }
 
@@ -168,6 +174,16 @@ class CalendarViewModel(application: Application) : AndroidViewModel(application
         productionCalendarPreferences.writeEnabled(enabled)
         _productionCalendarEnabled.value = enabled
         reloadProductionCalendar()
+    }
+
+    fun setShowCancelledEvents(show: Boolean) {
+        cancelledEventsPreferences.writeShowCancelled(show)
+        _showCancelledEvents.value = show
+        repository.showCancelledEvents = show
+        loadEventsForSelectedDay()
+        if (_eventSearchQuery.value.isNotBlank()) {
+            updateEventSearch(_eventSearchQuery.value)
+        }
     }
 
     private fun reloadProductionCalendar() {

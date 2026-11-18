@@ -32,4 +32,30 @@ class RRuleOccurrenceTest {
         assertTrue(RRuleOccurrence.occursOn(rule, start, LocalDate.of(2026, 11, 23)))
         assertFalse(RRuleOccurrence.occursOn(rule, start, LocalDate.of(2026, 11, 16)))
     }
+
+    @Test
+    fun parseExdatesReadsCommaSeparatedAndValueDate() {
+        val dates = RRuleOccurrence.parseExdates(
+            "20261118T150000Z,VALUE=DATE:20261125,20261202",
+        )
+        assertTrue(dates.contains(LocalDate.of(2026, 11, 18)))
+        assertTrue(dates.contains(LocalDate.of(2026, 11, 25)))
+        assertTrue(dates.contains(LocalDate.of(2026, 12, 2)))
+    }
+
+    @Test
+    fun weeklyHonorsExdates() {
+        val start = LocalDate.of(2026, 5, 20)
+        val rule = "FREQ=WEEKLY;BYDAY=WE;UNTIL=20261231T235959Z;WKST=MO"
+        val day = LocalDate.of(2026, 11, 18)
+        assertTrue(RRuleOccurrence.occursOn(rule, start, day))
+        assertFalse(
+            RRuleOccurrence.occursOn(
+                rule,
+                start,
+                day,
+                exdates = setOf(LocalDate.of(2026, 11, 18)),
+            ),
+        )
+    }
 }

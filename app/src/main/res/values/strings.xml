@@ -44,6 +44,9 @@
     <string name="go_to_today">Сегодня</string>
     <string name="events_today">События</string>
     <string name="no_events">Нет событий</string>
+    <string name="event_badge_recurring">Повторяющаяся встреча</string>
+    <string name="event_badge_accepted">Принято</string>
+    <string name="event_badge_pending">Не принято</string>
     <string name="search_events">Поиск событий</string>
     <string name="search_events_placeholder">Название, место, участник, вложение</string>
     <string name="search_events_hint">Введите запрос, чтобы найти события</string>
@@ -140,6 +143,9 @@
     <string name="app_settings_production_calendar">Производственный календарь</string>
     <string name="app_settings_production_calendar_toggle">Россия</string>
     <string name="app_settings_production_calendar_hint">Праздники, переносы и сокращённые дни на сетке и в списке дня.</string>
+    <string name="app_settings_cancelled_events">Отменённые встречи</string>
+    <string name="app_settings_cancelled_events_toggle">Показывать отменённые</string>
+    <string name="app_settings_cancelled_events_hint">Встречи, которые отменил организатор (Canceled / Отменено). По умолчанию скрыты.</string>
     <string name="field_url">URL</string>
     <string name="field_notes">Заметки</string>
     <string name="value_none">Нет</string>
