@@ -19,8 +19,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.UnfoldLess
 import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.material3.Icon
@@ -35,6 +37,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
@@ -45,6 +49,7 @@ import com.example.calendar.AppLocale
 import com.example.calendar.R
 import com.example.calendar.RussianDateFormat
 import com.example.calendar.data.CalendarEvent
+import com.example.calendar.data.EventRsvp
 import com.example.calendar.ui.theme.MacColors
 import java.time.Instant
 import java.time.LocalDate
@@ -314,73 +319,125 @@ fun JournalEventCard(
     val participantNames = event.attendees.mapNotNull { person ->
         person.name?.trim()?.takeIf { it.isNotEmpty() && !it.contains('@') }
     }
-    Column(
+    val showAccepted = event.selfAttendeeStatus == EventRsvp.STATUS_ACCEPTED
+    val showPending = EventRsvp.isNotAccepted(event.selfAttendeeStatus)
+    val showBadges = event.isRecurring || showAccepted || showPending
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(MacColors.contentBackground)
-            .clickable(onClick = onOpen)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .clickable(onClick = onOpen),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .padding(bottom = if (showBadges) 14.dp else 0.dp),
         ) {
-            Text(
-                text = timeText,
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MacColors.todayRed,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (url != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
-                    text = compactLinkLabel(url),
-                    modifier = Modifier
-                        .widthIn(max = 132.dp)
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable {
-                            runCatching {
-                                context.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    },
-                                )
-                            }
-                        }
-                        .padding(start = 8.dp, top = 2.dp, bottom = 2.dp),
+                    text = timeText,
+                    modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
                     color = MacColors.todayRed,
-                    textDecoration = TextDecoration.Underline,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.End,
+                )
+                if (url != null) {
+                    Text(
+                        text = compactLinkLabel(url),
+                        modifier = Modifier
+                            .widthIn(max = 132.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        },
+                                    )
+                                }
+                            }
+                            .padding(start = 8.dp, top = 2.dp, bottom = 2.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MacColors.todayRed,
+                        textDecoration = TextDecoration.Underline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.End,
+                    )
+                }
+            }
+            Text(
+                text = event.title,
+                modifier = Modifier.padding(top = 4.dp),
+                style = MaterialTheme.typography.bodyLarge.copy(
+                    fontSize = 16.sp,
+                    lineHeight = 21.sp,
+                    fontWeight = FontWeight.SemiBold,
+                ),
+                color = MacColors.primaryLabel,
+            )
+            if (participantNames.isNotEmpty()) {
+                Text(
+                    text = participantNames.joinToString(" · "),
+                    modifier = Modifier.padding(top = 6.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MacColors.secondaryLabel,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
         }
-        Text(
-            text = event.title,
-            modifier = Modifier.padding(top = 4.dp),
-            style = MaterialTheme.typography.bodyLarge.copy(
-                fontSize = 16.sp,
-                lineHeight = 21.sp,
-                fontWeight = FontWeight.SemiBold,
-            ),
-            color = MacColors.primaryLabel,
-        )
-        if (participantNames.isNotEmpty()) {
-            Text(
-                text = participantNames.joinToString(" · "),
-                modifier = Modifier.padding(top = 6.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MacColors.secondaryLabel,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+        if (showBadges) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 10.dp, bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (event.isRecurring) {
+                    EventCornerBadge(
+                        icon = Icons.Outlined.Sync,
+                        description = stringResource(R.string.event_badge_recurring),
+                    )
+                }
+                if (showAccepted) {
+                    EventCornerBadge(
+                        icon = Icons.Outlined.CheckCircle,
+                        description = stringResource(R.string.event_badge_accepted),
+                    )
+                }
+                if (showPending) {
+                    EventCornerBadge(
+                        icon = Icons.Outlined.HourglassEmpty,
+                        description = stringResource(R.string.event_badge_pending),
+                    )
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun EventCornerBadge(
+    icon: ImageVector,
+    description: String,
+) {
+    Icon(
+        imageVector = icon,
+        contentDescription = description,
+        tint = MacColors.secondaryLabel,
+        modifier = Modifier
+            .size(14.dp)
+            .semantics { contentDescription = description },
+    )
 }
 
 private fun compactLinkLabel(url: String): String {

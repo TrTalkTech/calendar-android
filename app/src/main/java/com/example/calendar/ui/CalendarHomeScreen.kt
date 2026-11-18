@@ -228,6 +228,7 @@ fun CalendarHomeScreen(
     }
     val today by viewModel.today.collectAsStateWithLifecycle()
     val productionCalendarEnabled by viewModel.productionCalendarEnabled.collectAsStateWithLifecycle()
+    val showCancelledEvents by viewModel.showCancelledEvents.collectAsStateWithLifecycle()
     val productionDays by viewModel.productionDays.collectAsStateWithLifecycle()
     val openNewEventSheet: () -> Unit = {
         newEventSession++
@@ -310,6 +311,8 @@ fun CalendarHomeScreen(
                         onAccountSlotsChange = viewModel::applyAccountSlots,
                         productionCalendarEnabled = productionCalendarEnabled,
                         onProductionCalendarEnabledChange = viewModel::setProductionCalendarEnabled,
+                        showCancelledEvents = showCancelledEvents,
+                        onShowCancelledEventsChange = viewModel::setShowCancelledEvents,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -565,6 +568,8 @@ fun CalendarHomeScreen(
                     onAccountSlotsChange = viewModel::applyAccountSlots,
                     productionCalendarEnabled = productionCalendarEnabled,
                     onProductionCalendarEnabledChange = viewModel::setProductionCalendarEnabled,
+                    showCancelledEvents = showCancelledEvents,
+                    onShowCancelledEventsChange = viewModel::setShowCancelledEvents,
                     onDismiss = { showAppSettingsSheet = false },
                 )
             }

@@ -41,6 +41,23 @@ object RRuleOccurrence {
         return occurrenceIndex(freq, parts, seriesStart, candidate, interval) < count
     }
 
+    /**
+     * Парсит [android.provider.CalendarContract.Events.EXDATE]:
+     * даты через запятую, формы `YYYYMMDD`, `YYYYMMDDTHHMMSSZ`, опционально `VALUE=DATE:`.
+     */
+    fun parseExdates(exdate: String?): Set<LocalDate> {
+        if (exdate.isNullOrBlank()) return emptySet()
+        val out = linkedSetOf<LocalDate>()
+        for (token in exdate.split(',', ';')) {
+            var raw = token.trim()
+            if (raw.isEmpty()) continue
+            val colon = raw.lastIndexOf(':')
+            if (colon >= 0) raw = raw.substring(colon + 1).trim()
+            parseUntilDate(raw)?.let { out += it }
+        }
+        return out
+    }
+
     private fun occursDaily(start: LocalDate, candidate: LocalDate, interval: Int): Boolean {
         val days = ChronoUnit.DAYS.between(start, candidate)
         return days >= 0 && days % interval == 0L
